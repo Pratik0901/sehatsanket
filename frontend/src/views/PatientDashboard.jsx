@@ -23,6 +23,7 @@ export function PatientDashboard({ onOpenAiTriage, onOpenEmergency, onOpenVideoC
   const dashboardView = activeTab === 'digital_twin' ? 'digital_twin' : internalView;
 
   const [activeFilter, setActiveFilter] = useState('upcoming');
+  const [doctorFilter, setDoctorFilter] = useState('all');
   const [doctors, setDoctors] = useState([]);
   const [selectedDoctor, setSelectedDoctor] = useState(null);
   const [selectedDate, setSelectedDate] = useState(14);
@@ -41,6 +42,7 @@ export function PatientDashboard({ onOpenAiTriage, onOpenEmergency, onOpenVideoC
   const [followups, setFollowups] = useState([]);
   const [approvalAlert, setApprovalAlert] = useState(null);
   const [notifications, setNotifications] = useState([]);
+  const [medActionAlert, setMedActionAlert] = useState(null);
 
   // Diagnostic Lab Orders & Precision Matcher State
   const [patientLabOrders, setPatientLabOrders] = useState([]);
@@ -209,14 +211,32 @@ export function PatientDashboard({ onOpenAiTriage, onOpenEmergency, onOpenVideoC
 
   const handleMedAction = async (medId, action) => {
     const pId = user?.patientId || user?.id || 'p_01';
+    const targetMed = medications.find(m => m.id === medId);
+    const medName = targetMed?.name || 'Medication';
+    const medDose = targetMed?.dosage || '';
+
+    // Immediate optimistic update
+    setMedications(prev => prev.map(m => m.id === medId ? { 
+      ...m, 
+      taken_today: action === 'take',
+      snoozed: action === 'snooze',
+      snoozed_at: action === 'snooze' ? 'Just now' : null
+    } : m));
+
     try {
       const res = await api.takeMedicationAction(pId, medId, action);
-      setMedications(prev => prev.map(m => m.id === medId ? { ...m, taken_today: action === 'take' } : m));
-      setRiskData(prev => ({
-        ...prev,
-        risk_score: res.updated_risk_score,
-        risk_level: res.updated_risk_level
-      }));
+      if (res && res.medication) {
+        setMedications(prev => prev.map(m => m.id === medId ? { ...m, ...res.medication } : m));
+      }
+      if (res && res.updated_risk_score !== undefined) {
+        setRiskData(prev => ({
+          ...prev,
+          risk_score: res.updated_risk_score,
+          risk_level: res.updated_risk_level
+        }));
+      }
+
+      loadNotifications();
 
       if (action === 'take') {
         confetti({
@@ -224,6 +244,28 @@ export function PatientDashboard({ onOpenAiTriage, onOpenEmergency, onOpenVideoC
           spread: 70,
           origin: { y: 0.8 }
         });
+        setMedActionAlert({
+          type: 'success',
+          title: `✓ Marked ${medName} as Taken`,
+          message: `Great job staying compliant! Your dose for today is recorded.`
+        });
+        setTimeout(() => setMedActionAlert(null), 4500);
+      } else if (action === 'snooze') {
+        setMedActionAlert({
+          type: 'snooze',
+          title: `⏰ Medication Snoozed: ${medName}`,
+          message: `A dose reminder notification has been sent: "Take ${medName} (${medDose})". Check your notifications bell at any time.`
+        });
+        setTimeout(() => setMedActionAlert(null), 5500);
+
+        try {
+          if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
+            new Notification(`⏰ Medication Reminder: ${medName}`, {
+              body: `Don't forget to take your ${medName} (${medDose}) scheduled for today.`,
+              icon: '/favicon.ico'
+            });
+          }
+        } catch (e) {}
       }
     } catch (e) {
       console.warn("Med action error:", e);
@@ -261,6 +303,47 @@ export function PatientDashboard({ onOpenAiTriage, onOpenEmergency, onOpenVideoC
   const doesDoctorSpeakPatientLang = (doc) => {
     return doc.spoken_languages?.includes(currentLanguage);
   };
+
+  const handleFilterDoctors = (filterType) => {
+    setDoctorFilter(filterType);
+    const elem = document.getElementById('doctor-directory-section');
+    if (elem) {
+      elem.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  };
+
+  const filteredDoctors = doctors.filter(doc => {
+    if (doctorFilter === 'all') return true;
+    if (doctorFilter === 'top' || doctorFilter === 'popular') {
+      return (doc.rating || 0) >= 4.6;
+    }
+    if (doctorFilter === 'specialty' || doctorFilter === 'recommended') {
+      return doc.specialization && doc.specialization !== 'General Physician';
+    }
+    if (doctorFilter === 'cardiology') {
+      return doc.specialization?.toLowerCase().includes('cardio');
+    }
+    if (doctorFilter === 'pediatrics') {
+      return doc.specialization?.toLowerCase().includes('pediatr');
+    }
+    if (doctorFilter === 'therapy') {
+      return doc.specialization?.toLowerCase().includes('therap') || doc.specialization?.toLowerCase().includes('psycholog');
+    }
+    if (doctorFilter === 'general') {
+      return doc.specialization?.toLowerCase().includes('general');
+    }
+    if (doctorFilter === 'language') {
+      return doesDoctorSpeakPatientLang(doc);
+    }
+    return true;
+  }).sort((a, b) => {
+    if (doctorFilter === 'top' || doctorFilter === 'popular') {
+      return (b.rating || 0) - (a.rating || 0);
+    }
+    const aLang = doesDoctorSpeakPatientLang(a) ? 1 : 0;
+    const bLang = doesDoctorSpeakPatientLang(b) ? 1 : 0;
+    return bLang - aLang;
+  });
 
   return (
     <div className="space-y-6 pb-24">
@@ -555,7 +638,7 @@ export function PatientDashboard({ onOpenAiTriage, onOpenEmergency, onOpenVideoC
         
         {/* Card 1: Top Doctors */}
         <div 
-          onClick={() => setActiveFilter('popular')}
+          onClick={() => handleFilterDoctors('top')}
           className="cursor-pointer group relative overflow-hidden rounded-3xl p-5 bg-gradient-to-br from-[#00875A] to-[#056342] text-white shadow-lg shadow-emerald-800/10 hover:shadow-xl hover:scale-[1.02] transition-all"
         >
           <div className="flex items-start justify-between">
@@ -566,21 +649,21 @@ export function PatientDashboard({ onOpenAiTriage, onOpenEmergency, onOpenVideoC
               <ArrowUpRight className="w-4 h-4" />
             </div>
           </div>
-          <p className="text-[11px] text-emerald-100 mt-1">Verified Specialists</p>
+          <p className="text-[11px] text-emerald-100 mt-1">Verified Top Rated (★ 4.6+)</p>
 
           <div className="mt-4 flex items-center -space-x-2">
             <img className="w-7 h-7 rounded-full border-2 border-white object-cover" src="https://images.unsplash.com/photo-1622253692010-333f2da6031d?auto=format&fit=crop&w=100&q=80" alt="doc" />
+            <img className="w-7 h-7 rounded-full border-2 border-white object-cover" src="https://images.unsplash.com/photo-1582750433449-648ed127bb54?auto=format&fit=crop&w=100&q=80" alt="doc" />
             <img className="w-7 h-7 rounded-full border-2 border-white object-cover" src="https://images.unsplash.com/photo-1537368910025-700350fe46c7?auto=format&fit=crop&w=100&q=80" alt="doc" />
-            <img className="w-7 h-7 rounded-full border-2 border-white object-cover" src="https://images.unsplash.com/photo-1594824813591-10c0e7f7881c?auto=format&fit=crop&w=100&q=80" alt="doc" />
             <div className="w-7 h-7 rounded-full bg-black/40 border-2 border-white flex items-center justify-center text-[10px] font-bold">
-              17+
+              ★ 4.9
             </div>
           </div>
         </div>
 
         {/* Card 2: Specialty Doctors */}
         <div 
-          onClick={() => setActiveFilter('recommended')}
+          onClick={() => handleFilterDoctors('specialty')}
           className="cursor-pointer group relative overflow-hidden rounded-3xl p-5 bg-white border border-slate-100 shadow-sm hover:shadow-md hover:scale-[1.02] transition-all"
         >
           <div className="flex items-start justify-between">
@@ -591,7 +674,7 @@ export function PatientDashboard({ onOpenAiTriage, onOpenEmergency, onOpenVideoC
               <ArrowUpRight className="w-4 h-4" />
             </div>
           </div>
-          <p className="text-[11px] text-slate-500 mt-1">Cardio • Neuro • Surgery</p>
+          <p className="text-[11px] text-slate-500 mt-1">Cardio • Pediatrics • Therapy</p>
 
           <div className="mt-4 flex items-center gap-2 text-slate-400">
             <div className="p-1.5 rounded-xl bg-rose-50 text-rose-600">
@@ -600,10 +683,10 @@ export function PatientDashboard({ onOpenAiTriage, onOpenEmergency, onOpenVideoC
             <div className="p-1.5 rounded-xl bg-blue-50 text-blue-600">
               <Activity className="w-4 h-4" />
             </div>
-            <div className="p-1.5 rounded-xl bg-emerald-50 text-emerald-600">
-              <Pill className="w-4 h-4" />
+            <div className="p-1.5 rounded-xl bg-purple-50 text-purple-600">
+              <Sparkles className="w-4 h-4" />
             </div>
-            <span className="text-[11px] font-bold text-slate-600 ml-1">15+</span>
+            <span className="text-[11px] font-bold text-slate-600 ml-1">Specialists</span>
           </div>
         </div>
 
@@ -728,6 +811,20 @@ export function PatientDashboard({ onOpenAiTriage, onOpenEmergency, onOpenVideoC
             </span>
           </div>
 
+          {medActionAlert && (
+            <div className={`p-3 rounded-2xl border text-xs flex items-start gap-2.5 animate-in fade-in slide-in-from-top-1 ${
+              medActionAlert.type === 'snooze' 
+                ? 'bg-amber-50/90 border-amber-200 text-amber-950' 
+                : 'bg-emerald-50/90 border-emerald-200 text-emerald-950'
+            }`}>
+              <Bell className={`w-4 h-4 flex-shrink-0 mt-0.5 ${medActionAlert.type === 'snooze' ? 'text-amber-600 animate-bounce' : 'text-emerald-600'}`} />
+              <div className="flex-1 space-y-0.5">
+                <p className="font-extrabold">{medActionAlert.title}</p>
+                <p className="text-[11px] opacity-90 leading-relaxed">{medActionAlert.message}</p>
+              </div>
+            </div>
+          )}
+
           <div className="space-y-2.5">
             {medications.map((med) => (
               <div 
@@ -735,8 +832,15 @@ export function PatientDashboard({ onOpenAiTriage, onOpenEmergency, onOpenVideoC
                 className="p-3.5 rounded-2xl bg-slate-50/80 border border-slate-100 flex items-center justify-between"
               >
                 <div>
-                  <p className="text-xs font-extrabold text-slate-800">{med.name}</p>
-                  <p className="text-[11px] text-slate-500">
+                  <div className="flex items-center gap-2">
+                    <p className="text-xs font-extrabold text-slate-800">{med.name}</p>
+                    {med.snoozed && !med.taken_today && (
+                      <span className="px-2 py-0.5 rounded-md bg-amber-100 text-amber-800 font-extrabold text-[10px] flex items-center gap-1 border border-amber-200/80">
+                        <Bell className="w-2.5 h-2.5 text-amber-600" /> Snoozed
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-slate-500 mt-0.5">
                     {med.dosage} • <span className="font-bold text-emerald-700">{med.timing}</span>
                   </p>
                   <p className="text-[10px] text-slate-400 italic mt-0.5">{med.instructions}</p>
@@ -751,13 +855,18 @@ export function PatientDashboard({ onOpenAiTriage, onOpenEmergency, onOpenVideoC
                   <div className="flex items-center gap-1.5">
                     <button
                       onClick={() => handleMedAction(med.id, 'take')}
-                      className="px-3 py-1.5 rounded-full bg-brand-emerald hover:bg-emerald-700 text-white text-xs font-extrabold shadow-sm transition active:scale-95"
+                      className="px-3 py-1.5 rounded-full bg-brand-emerald hover:bg-emerald-700 text-white text-xs font-extrabold shadow-sm transition active:scale-95 cursor-pointer"
                     >
                       {t('takeMedication', 'Take')}
                     </button>
                     <button
                       onClick={() => handleMedAction(med.id, 'snooze')}
-                      className="px-2.5 py-1.5 rounded-full bg-slate-200 text-slate-700 text-[11px] font-bold hover:bg-slate-300 transition"
+                      className={`px-2.5 py-1.5 rounded-full text-[11px] font-bold transition cursor-pointer active:scale-95 ${
+                        med.snoozed 
+                          ? 'bg-amber-100 text-amber-800 hover:bg-amber-200 border border-amber-300' 
+                          : 'bg-slate-200 text-slate-700 hover:bg-slate-300'
+                      }`}
+                      title="Snooze reminder - triggers a notification alert"
                     >
                       {t('snooze', 'Snooze')}
                     </button>
@@ -811,89 +920,130 @@ export function PatientDashboard({ onOpenAiTriage, onOpenEmergency, onOpenVideoC
       </div>
 
       {/* Doctor Directory with Regional Language Matching (PRD §4.2 item 5) */}
-      <div className="space-y-4">
-        <div className="flex items-center justify-between">
+      <div id="doctor-directory-section" className="space-y-4 scroll-mt-6">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
             <h2 className="text-xl font-black text-slate-900 tracking-tight">
               {t('allDoctors', 'Doctor Consultation & Language Matching')}
             </h2>
             <p className="text-xs text-slate-500">
-              Doctors speaking <span className="font-bold text-emerald-700 uppercase">{currentLanguage}</span> prioritized first
+              Doctors speaking <span className="font-bold text-emerald-700 uppercase">{currentLanguage}</span> prioritized first • One-click appointment scheduling
             </p>
           </div>
-          <span className="text-xs font-bold text-brand-emerald">
-            {doctors.length} Doctors Available
+          <span className="text-xs font-bold text-brand-emerald bg-emerald-50 border border-emerald-200 px-3 py-1 rounded-full w-fit">
+            {filteredDoctors.length} Doctors Available
           </span>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
-          {doctors.map((doc) => {
-            const hasLangMatch = doesDoctorSpeakPatientLang(doc);
+        {/* Filter Pills Bar */}
+        <div className="flex items-center gap-2 overflow-x-auto pb-1 text-xs font-extrabold scrollbar-none">
+          {[
+            { id: 'all', label: 'All Doctors' },
+            { id: 'top', label: '★ Top Rated (4.6+)' },
+            { id: 'specialty', label: 'Specialty Consultants' },
+            { id: 'cardiology', label: 'Cardiology' },
+            { id: 'pediatrics', label: 'Pediatrics' },
+            { id: 'therapy', label: 'Therapy & Psychology' },
+            { id: 'general', label: 'General Medicine' },
+            { id: 'language', label: `Speaks ${currentLanguage.toUpperCase()}` }
+          ].map(f => {
+            const isSelected = doctorFilter === f.id;
             return (
-              <div
-                key={doc.id}
-                onClick={() => {
-                  setSelectedDoctor(doc);
-                  setIsBookingOpen(true);
-                }}
-                className={`cursor-pointer group rounded-3xl p-5 bg-white border transition-all flex flex-col justify-between ${
-                  hasLangMatch ? 'border-emerald-300 shadow-md hover:shadow-float hover:scale-[1.02]' : 'border-slate-100 shadow-soft hover:shadow-md'
+              <button
+                key={f.id}
+                onClick={() => setDoctorFilter(f.id)}
+                className={`px-3.5 py-1.5 rounded-full whitespace-nowrap transition cursor-pointer ${
+                  isSelected 
+                    ? 'bg-slate-900 text-white shadow-xs font-black' 
+                    : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-100'
                 }`}
               >
-                <div>
-                  <div className="flex items-start justify-between">
-                    <span className="text-xs font-extrabold text-slate-500">
-                      {doc.specialization}
-                    </span>
-                    <div className="flex items-center gap-1 text-xs font-extrabold text-amber-500 bg-amber-50 px-2 py-0.5 rounded-full">
-                      <Star className="w-3 h-3 fill-amber-400 text-amber-400" />
-                      <span>{doc.rating}</span>
-                    </div>
-                  </div>
-
-                  <div className="mt-3 flex items-center gap-3">
-                    <img
-                      src={doc.avatar_url}
-                      alt={doc.name}
-                      className="w-14 h-14 rounded-2xl object-cover border border-slate-200 shadow-sm"
-                    />
-                    <div>
-                      <h4 className="font-black text-sm text-slate-900 group-hover:text-brand-emerald transition-colors">
-                        {doc.name}
-                      </h4>
-                      <p className="text-[11px] text-slate-500 font-medium">
-                        {doc.experience_years}+ yrs exp • ${doc.session_fee} / session
-                      </p>
-                      
-                      {/* Language Matching Tag */}
-                      <div className="mt-1 flex items-center gap-1">
-                        {hasLangMatch ? (
-                          <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-extrabold flex items-center gap-1">
-                            <Check className="w-3 h-3" />
-                            <span>Speaks {currentLanguage.toUpperCase()}</span>
-                          </span>
-                        ) : (
-                          <span className="px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 text-[10px] font-bold">
-                            Translates via Sarvam AI
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-xs">
-                  <span className="text-[11px] text-slate-400 truncate max-w-[140px]">
-                    {doc.clinic_address}
-                  </span>
-                  <span className="text-brand-emerald font-extrabold flex items-center gap-1 group-hover:translate-x-1 transition-transform">
-                    Book Slot <ChevronRight className="w-4 h-4" />
-                  </span>
-                </div>
-              </div>
+                {f.label}
+              </button>
             );
           })}
         </div>
+
+        {filteredDoctors.length === 0 ? (
+          <div className="p-8 rounded-3xl bg-white border border-slate-100 text-center space-y-3 shadow-soft">
+            <p className="text-sm font-bold text-slate-600">No doctors found matching this specialty filter.</p>
+            <button
+              onClick={() => setDoctorFilter('all')}
+              className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black rounded-xl transition cursor-pointer"
+            >
+              Reset to All Doctors
+            </button>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+            {filteredDoctors.map((doc) => {
+              const hasLangMatch = doesDoctorSpeakPatientLang(doc);
+              return (
+                <div
+                  key={doc.id}
+                  onClick={() => {
+                    setSelectedDoctor(doc);
+                    setIsBookingOpen(true);
+                  }}
+                  className={`cursor-pointer group rounded-3xl p-5 bg-white border transition-all flex flex-col justify-between ${
+                    hasLangMatch ? 'border-emerald-300 shadow-md hover:shadow-float hover:scale-[1.02]' : 'border-slate-100 shadow-soft hover:shadow-md'
+                  }`}
+                >
+                  <div>
+                    <div className="flex items-start justify-between">
+                      <span className="text-xs font-extrabold text-slate-500">
+                        {doc.specialization}
+                      </span>
+                      <div className="flex items-center gap-1 text-xs font-extrabold text-amber-500 bg-amber-50 px-2 py-0.5 rounded-full">
+                        <Star className="w-3 h-3 fill-amber-400 text-amber-400" />
+                        <span>{doc.rating}</span>
+                      </div>
+                    </div>
+
+                    <div className="mt-3 flex items-center gap-3">
+                      <img
+                        src={doc.avatar_url}
+                        alt={doc.name}
+                        className="w-14 h-14 rounded-2xl object-cover border border-slate-200 shadow-sm"
+                      />
+                      <div>
+                        <h4 className="font-black text-sm text-slate-900 group-hover:text-brand-emerald transition-colors">
+                          {doc.name}
+                        </h4>
+                        <p className="text-[11px] text-slate-500 font-medium">
+                          {doc.experience_years}+ yrs exp • ${doc.session_fee} / session
+                        </p>
+                        
+                        {/* Language Matching Tag */}
+                        <div className="mt-1 flex items-center gap-1">
+                          {hasLangMatch ? (
+                            <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-extrabold flex items-center gap-1">
+                              <Check className="w-3 h-3" />
+                              <span>Speaks {currentLanguage.toUpperCase()}</span>
+                            </span>
+                          ) : (
+                            <span className="px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 text-[10px] font-bold">
+                              Translates via Sarvam AI
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-xs">
+                    <span className="text-[11px] text-slate-400 truncate max-w-[140px]">
+                      {doc.clinic_address}
+                    </span>
+                    <span className="text-brand-emerald font-extrabold flex items-center gap-1 group-hover:translate-x-1 transition-transform">
+                      Book Slot <ChevronRight className="w-4 h-4" />
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* Doctor Details & Booking Modal */}

@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime
 from fastapi import APIRouter, HTTPException
 from typing import Dict, Any, Optional
 from app.models import ReminderCreateRequest, ReminderActionRequest
@@ -61,6 +62,7 @@ def create_reminder(req: ReminderCreateRequest):
         patient.setdefault("post_discharge_followups", []).append(new_followup)
         item = new_followup
 
+    db.save_patient(patient)
     return {"message": "Reminder created successfully", "item": item}
 
 @router.post("/patients/{patient_id}/meds/{med_id}/action")
@@ -78,10 +80,27 @@ def take_medication_action(patient_id: str, med_id: str, req: ReminderActionRequ
     if not target_med:
         raise HTTPException(status_code=404, detail="Medication not found")
 
+    new_notif = None
     if req.action == "take":
         target_med["taken_today"] = True
+        target_med["snoozed"] = False
     elif req.action == "snooze":
         target_med["taken_today"] = False
+        target_med["snoozed"] = True
+        target_med["snoozed_at"] = datetime.now().strftime("%I:%M %p")
+        
+        new_notif = {
+            "id": f"notif_{uuid.uuid4().hex[:6]}",
+            "title": f"⏰ Medication Reminder: {target_med.get('name', 'Prescription')}",
+            "message": f"Reminder to take your scheduled dose: {target_med.get('name')} ({target_med.get('dosage', '1 dose')}) - {target_med.get('timing', 'Prescribed timing')}. Please take with water.",
+            "timestamp": "Just now",
+            "time": datetime.now().strftime("%I:%M %p"),
+            "type": "medication_reminder",
+            "med_name": target_med.get("name"),
+            "dosage": target_med.get("dosage"),
+            "read": False
+        }
+        patient.setdefault("notifications", []).insert(0, new_notif)
 
     # Recalculate dynamic readmission risk
     updated_risk = readmission_service.calculate_risk(patient)
@@ -89,9 +108,13 @@ def take_medication_action(patient_id: str, med_id: str, req: ReminderActionRequ
     patient["risk_level"] = updated_risk["risk_level"]
     patient["risk_factors"] = updated_risk["risk_factors"]
 
+    db.save_patient(patient)
+
     return {
         "message": f"Medication marked as {'taken' if req.action == 'take' else 'snoozed'}",
         "medication": target_med,
+        "notification": new_notif,
+        "notifications": patient.get("notifications", []),
         "updated_risk_score": updated_risk["risk_score"],
         "updated_risk_level": updated_risk["risk_level"]
     }

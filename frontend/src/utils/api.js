@@ -95,6 +95,9 @@ export const api = {
   restockMedicine: (medId, quantity = 200) => fetchWithAuth(`/hospital/medicines/${medId}/restock?quantity=${quantity}`, {
     method: 'POST'
   }),
+  adjustMedicineStock: (medId, delta) => fetchWithAuth(`/hospital/medicines/${medId}/adjust-stock?quantity=${delta}`, {
+    method: 'POST'
+  }),
 
   // Patient Profile & Medication Reminders
   getPatientProfile: (patientId) => fetchWithAuth(`/patients/${patientId}/profile`),

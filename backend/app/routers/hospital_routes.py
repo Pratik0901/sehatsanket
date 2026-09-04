@@ -32,11 +32,26 @@ def get_admitted_patients():
     return db.admitted_patients
 
 @router.post("/medicines/{med_id}/restock")
-def restock_medicine(med_id: str, quantity: int = 200):
+@router.post("/medicines/{med_id}/adjust-stock")
+def adjust_medicine_stock(med_id: str, quantity: int = 50, delta: int = None):
     med = db.medicines.get(med_id)
     if not med:
         raise HTTPException(status_code=404, detail="Medicine item not found")
-    med["stock_count"] += quantity
-    if med["stock_count"] > med["min_threshold"]:
+    
+    amount = delta if delta is not None else quantity
+    new_stock = max(0, med["stock_count"] + amount)
+    med["stock_count"] = new_stock
+    
+    if new_stock == 0:
+        med["status"] = "Critical"
+    elif new_stock <= med.get("min_threshold", 50):
+        med["status"] = "Low Stock"
+    else:
         med["status"] = "In Stock"
-    return {"message": f"Successfully added {quantity} units to {med['name']}.", "medicine": med}
+        
+    action_text = f"added {amount}" if amount >= 0 else f"deducted {abs(amount)}"
+    return {
+        "message": f"Successfully {action_text} {med.get('unit', 'units')} for {med['name']}. Current stock: {new_stock} {med.get('unit', 'units')}.",
+        "medicine": med,
+        "new_stock": new_stock
+    }

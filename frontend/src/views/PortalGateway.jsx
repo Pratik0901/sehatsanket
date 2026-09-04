@@ -49,7 +49,7 @@ export function PortalGateway({ onSelectPortal }) {
         'Real-time video consults with Indian language subtitles',
         'High-risk readmission monitor & patient EHR roster'
       ],
-      profilesAvailable: 'Dr. Ching Ming Yang • Dr. Rajesh Rao • Specialists'
+      profilesAvailable: 'Dr. Ching Ming Yang • Dr. Rajesh Rao • Dr. Marc Lee • Dr. Olivia Bennett • Dr. Ethan Roberts'
     },
     {
       id: 'admin_login',

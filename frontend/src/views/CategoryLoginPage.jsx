@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { 
   User, Stethoscope, Building2, Lock, ArrowLeft, ArrowRight, 
-  CheckCircle2, AlertTriangle, ShieldCheck, Sparkles, Key, Check, Plus
+  CheckCircle2, AlertTriangle, ShieldCheck, Sparkles, Key, Check, Plus, Star, MapPin
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
@@ -233,35 +233,99 @@ export function CategoryLoginPage({ category, onBack }) {
                 </p>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                {categoryProfiles.map((p) => (
-                  <button
-                    key={p.id}
-                    onClick={() => handleSelectProfile(p)}
-                    className="p-4 rounded-3xl border-2 border-slate-200/90 hover:border-slate-800 bg-slate-50/50 hover:bg-white text-left transition-all group flex items-start gap-3 shadow-xs hover:shadow-md"
-                  >
-                    <img
-                      src={p.avatar}
-                      alt={p.name}
-                      className="w-12 h-12 rounded-2xl object-cover border-2 border-slate-300 group-hover:border-slate-800 flex-shrink-0 transition"
-                    />
-                    <div className="flex-1 min-w-0 space-y-0.5">
-                      <div className="flex items-center justify-between">
-                        <h4 className="text-sm font-black text-slate-900 group-hover:text-black truncate">
-                          {p.name}
-                        </h4>
-                        <span className="text-[10px] uppercase font-bold text-slate-400 bg-white px-2 py-0.5 rounded-full border border-slate-200">
-                          {p.lang || 'en'}
+              <div className={category === 'doctor' ? "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4" : "grid grid-cols-1 sm:grid-cols-2 gap-4"}>
+                {categoryProfiles.map((p) => {
+                  if (category === 'doctor') {
+                    return (
+                      <button
+                        key={p.id}
+                        onClick={() => handleSelectProfile(p)}
+                        className="p-4 rounded-3xl border-2 border-emerald-300 hover:border-emerald-600 bg-white text-left transition-all group flex flex-col justify-between gap-3 shadow-xs hover:shadow-lg hover:-translate-y-0.5 cursor-pointer relative overflow-hidden"
+                      >
+                        {/* Top Header: Specialization & Rating */}
+                        <div className="flex items-center justify-between w-full border-b border-slate-100 pb-2">
+                          <span className="text-xs font-black text-slate-800">
+                            {p.specialization || 'Clinical Specialist'}
+                          </span>
+                          <span className="text-xs font-black text-amber-500 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full flex items-center gap-1">
+                            <Star className="w-3 h-3 fill-amber-400 text-amber-400" />
+                            <span>{p.rating || 4.8}</span>
+                          </span>
+                        </div>
+
+                        {/* Doctor Main Info */}
+                        <div className="flex items-center gap-3 w-full">
+                          <img
+                            src={p.avatar}
+                            alt={p.name}
+                            className="w-14 h-14 rounded-2xl object-cover border-2 border-slate-200 group-hover:border-emerald-500 flex-shrink-0 transition shadow-xs"
+                          />
+                          <div className="flex-1 min-w-0 space-y-1">
+                            <h4 className="text-sm font-black text-slate-900 group-hover:text-emerald-700 truncate leading-tight">
+                              {p.name}
+                            </h4>
+                            <p className="text-[11px] font-semibold text-slate-500 truncate">
+                              {p.experience_years ? `${p.experience_years}+ yrs exp` : 'Senior Physician'} • ${p.session_fee || 80}/session
+                            </p>
+                            <div>
+                              {p.badgeText === 'Speaks HI' ? (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200 text-[10px] font-black">
+                                  <Check className="w-3 h-3 text-emerald-600 stroke-[3]" />
+                                  <span>Speaks HI</span>
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-200 text-[10px] font-bold">
+                                  <Sparkles className="w-2.5 h-2.5 text-indigo-500" />
+                                  <span>Translates via Sarvam AI</span>
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Footer: Clinic Location & Direct Login Action */}
+                        <div className="flex items-center justify-between w-full pt-2 border-t border-slate-100 text-[11px]">
+                          <span className="text-slate-400 truncate max-w-[140px] font-medium" title={p.clinic_address}>
+                            {p.clinic_address || 'Apollo Metro Hospital'}
+                          </span>
+                          <span className="font-black text-emerald-600 group-hover:text-emerald-700 flex items-center gap-1">
+                            <span>Direct Login</span>
+                            <ArrowRight className="w-3.5 h-3.5 group-hover:translate-x-1 transition-transform" />
+                          </span>
+                        </div>
+                      </button>
+                    );
+                  }
+
+                  return (
+                    <button
+                      key={p.id}
+                      onClick={() => handleSelectProfile(p)}
+                      className="p-4 rounded-3xl border-2 border-slate-200/90 hover:border-slate-800 bg-slate-50/50 hover:bg-white text-left transition-all group flex items-start gap-3 shadow-xs hover:shadow-md cursor-pointer"
+                    >
+                      <img
+                        src={p.avatar}
+                        alt={p.name}
+                        className="w-12 h-12 rounded-2xl object-cover border-2 border-slate-300 group-hover:border-slate-800 flex-shrink-0 transition"
+                      />
+                      <div className="flex-1 min-w-0 space-y-0.5">
+                        <div className="flex items-center justify-between">
+                          <h4 className="text-sm font-black text-slate-900 group-hover:text-black truncate">
+                            {p.name}
+                          </h4>
+                          <span className="text-[10px] uppercase font-bold text-slate-400 bg-white px-2 py-0.5 rounded-full border border-slate-200">
+                            {p.lang || 'en'}
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-600 leading-snug">{p.subtext}</p>
+                        <span className="text-[11px] font-bold text-emerald-700 flex items-center gap-1 pt-1">
+                          <span>Sign In as {p.name.split(' ')[0]}</span>
+                          <ArrowRight className="w-3 h-3 group-hover:translate-x-1 transition-transform" />
                         </span>
                       </div>
-                      <p className="text-xs text-slate-600 leading-snug">{p.subtext}</p>
-                      <span className="text-[11px] font-bold text-emerald-700 flex items-center gap-1 pt-1">
-                        <span>Sign In as {p.name.split(' ')[0]}</span>
-                        <ArrowRight className="w-3 h-3 group-hover:translate-x-1 transition-transform" />
-                      </span>
-                    </div>
-                  </button>
-                ))}
+                    </button>
+                  );
+                })}
               </div>
             </div>
           )}

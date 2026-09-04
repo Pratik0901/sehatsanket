@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { 
   ShieldAlert, Navigation, Pill, Users, Stethoscope, 
   MapPin, Clock, CheckCircle2, AlertTriangle, RefreshCw, 
-  Send, Plus, Activity, UserCheck, PhoneCall, Radio,
+  Send, Plus, Minus, Activity, UserCheck, PhoneCall, Radio,
   Microscope, FlaskConical, Building2, Gauge, Award, ChevronDown, ChevronUp,
   Star, MessageSquareQuote, Volume2, Globe, HeartHandshake
 } from 'lucide-react';
@@ -43,10 +43,18 @@ export function AdminDashboard() {
       setResources(res);
       const emRes = await api.getActiveEmergencies();
       setEmergencies(emRes || []);
-      if (emRes && emRes.length > 0 && !selectedEmergency) {
-        setSelectedEmergency(emRes[0]);
-        if (emRes[0].recommended_ambulance_id) {
-          setSelectedAmbulanceId(emRes[0].recommended_ambulance_id);
+      if (emRes && emRes.length > 0) {
+        if (!selectedEmergency) {
+          setSelectedEmergency(emRes[0]);
+          if (emRes[0].recommended_ambulance_id) {
+            setSelectedAmbulanceId(emRes[0].recommended_ambulance_id);
+          }
+        } else {
+          // Keep current selected emergency updated with fresh server status
+          const updated = emRes.find(e => e.id === selectedEmergency.id);
+          if (updated) {
+            setSelectedEmergency(updated);
+          }
         }
       }
       // Load all hospital diagnostic lab orders with precision analytics
@@ -66,23 +74,67 @@ export function AdminDashboard() {
   const handleDispatch = async (emId) => {
     const ambId = selectedAmbulanceId || selectedEmergency?.recommended_ambulance_id || 'amb_01';
     try {
+      // Optimistic update
+      setSelectedEmergency(prev => prev && prev.id === emId ? { ...prev, status: 'Ambulance Dispatched', assigned_ambulance_id: ambId } : prev);
+      setEmergencies(prev => prev.map(em => em.id === emId ? { ...em, status: 'Ambulance Dispatched', assigned_ambulance_id: ambId } : em));
+
       const res = await api.dispatchAmbulance(emId, ambId);
-      setActionNotice(res.message || "Ambulance dispatched successfully!");
-      loadData();
+      setActionNotice(res.message || "Ambulance dispatched successfully! Vehicle is en route.");
+      await loadData();
       setTimeout(() => setActionNotice(null), 4000);
     } catch (e) {
       console.warn("Dispatch error:", e);
+      loadData();
     }
   };
 
-  const handleRestock = async (medId) => {
+  const handleResolveEmergency = async (emId) => {
     try {
-      await api.restockMedicine(medId, 250);
-      loadData();
-      setActionNotice("Medicine inventory successfully replenished (+250 units)");
-      setTimeout(() => setActionNotice(null), 3000);
+      // Optimistic update
+      setSelectedEmergency(prev => prev && prev.id === emId ? { ...prev, status: 'Resolved' } : prev);
+      setEmergencies(prev => prev.map(em => em.id === emId ? { ...em, status: 'Resolved' } : em));
+
+      const res = await api.resolveEmergency(emId);
+      setActionNotice(res?.message || "Emergency resolved successfully! Ambulance returned to active fleet.");
+      await loadData();
+      setTimeout(() => setActionNotice(null), 4000);
     } catch (e) {
-      console.warn("Restock error:", e);
+      console.warn("Resolve emergency error:", e);
+      loadData();
+    }
+  };
+
+  const handleAdjustStock = async (medId, delta) => {
+    try {
+      // Optimistic update
+      setResources(prev => {
+        if (!prev || !prev.medicines) return prev;
+        return {
+          ...prev,
+          medicines: prev.medicines.map(m => {
+            if (m.id === medId) {
+              const newCount = Math.max(0, (m.stock_count || 0) + delta);
+              let newStatus = 'In Stock';
+              if (newCount <= (m.min_threshold || 50) * 0.4) {
+                newStatus = 'Critical';
+              } else if (newCount <= (m.min_threshold || 50)) {
+                newStatus = 'Low Stock';
+              }
+              return { ...m, stock_count: newCount, status: newStatus };
+            }
+            return m;
+          })
+        };
+      });
+
+      const res = await api.adjustMedicineStock(medId, delta);
+      const sign = delta > 0 ? `+${delta}` : `${delta}`;
+      setActionNotice(res?.message || `Medicine stock updated (${sign} units)`);
+      loadData();
+      setTimeout(() => setActionNotice(null), 3500);
+    } catch (e) {
+      console.warn("Adjust stock error:", e);
+      loadData();
     }
   };
 
@@ -330,7 +382,9 @@ export function AdminDashboard() {
                 {/* Nearest Ambulance Selector */}
                 <div>
                   <label className="text-xs font-extrabold text-slate-700 block mb-1.5">
-                    Select Available Ambulance to Dispatch:
+                    {selectedEmergency.status === 'Ambulance Dispatched'
+                      ? 'Assigned Ambulance Vehicle (En Route):'
+                      : 'Select Available Ambulance to Dispatch:'}
                   </label>
                   <select
                     value={selectedAmbulanceId}
@@ -345,20 +399,80 @@ export function AdminDashboard() {
                   </select>
                 </div>
 
-                <div className="flex gap-2 pt-1">
-                  <button
-                    onClick={() => handleDispatch(selectedEmergency.id)}
-                    disabled={selectedEmergency.status === 'Ambulance Dispatched'}
-                    className="flex-1 py-3.5 px-4 rounded-2xl bg-red-600 hover:bg-red-700 disabled:bg-slate-400 text-white font-black text-xs flex items-center justify-center gap-2 shadow-lg shadow-red-600/30 transition active:scale-95"
-                  >
-                    <Send className="w-4 h-4" />
-                    <span>
-                      {selectedEmergency.status === 'Ambulance Dispatched'
-                        ? 'Ambulance Already En Route'
-                        : t('dispatchAmbulance', 'Dispatch Nearest Ambulance')}
-                    </span>
-                  </button>
-                </div>
+                {selectedEmergency.status === 'Ambulance Dispatched' ? (
+                  <div className="space-y-2 pt-1">
+                    <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-2xl flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Navigation className="w-4 h-4 text-emerald-600 animate-pulse" />
+                        <div>
+                          <p className="text-xs font-black text-emerald-900">Ambulance En Route</p>
+                          <p className="text-[11px] text-emerald-700 font-medium">
+                            ETA: ~{selectedEmergency.ambulance_eta_mins || 6} mins • Live GPS Tracking Active
+                          </p>
+                        </div>
+                      </div>
+                      <span className="px-2 py-0.5 rounded-full bg-emerald-200 text-emerald-800 text-[10px] font-black uppercase">
+                        Active Transit
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      <button
+                        onClick={() => setActiveTab('ambulances')}
+                        className="py-3 px-4 rounded-2xl bg-slate-900 hover:bg-slate-800 text-white font-extrabold text-xs flex items-center justify-center gap-2 shadow-sm transition active:scale-95 cursor-pointer"
+                      >
+                        <Navigation className="w-4 h-4 text-emerald-400" />
+                        <span>Track Fleet GPS</span>
+                      </button>
+
+                      <button
+                        onClick={() => handleResolveEmergency(selectedEmergency.id)}
+                        className="py-3 px-4 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs flex items-center justify-center gap-2 shadow-sm transition active:scale-95 cursor-pointer"
+                      >
+                        <CheckCircle2 className="w-4 h-4" />
+                        <span>Mark Arrived / Resolve</span>
+                      </button>
+                    </div>
+
+                    <button
+                      onClick={() => handleDispatch(selectedEmergency.id)}
+                      className="w-full py-2 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-[11px] flex items-center justify-center gap-1.5 transition cursor-pointer"
+                    >
+                      <RefreshCw className="w-3.5 h-3.5" />
+                      <span>Re-Dispatch Selected Ambulance</span>
+                    </button>
+                  </div>
+                ) : selectedEmergency.status === 'Resolved' ? (
+                  <div className="space-y-2 pt-1">
+                    <div className="p-3 bg-slate-100 border border-slate-200 rounded-2xl flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                        <span className="text-xs font-extrabold text-slate-800">Emergency Resolved & Mission Complete</span>
+                      </div>
+                      <span className="px-2 py-0.5 rounded-full bg-slate-200 text-slate-700 text-[10px] font-black uppercase">
+                        Closed
+                      </span>
+                    </div>
+
+                    <button
+                      onClick={() => handleDispatch(selectedEmergency.id)}
+                      className="w-full py-2.5 px-3 rounded-xl bg-red-600 hover:bg-red-700 text-white font-black text-xs flex items-center justify-center gap-1.5 transition cursor-pointer"
+                    >
+                      <Send className="w-3.5 h-3.5" />
+                      <span>Reopen & Dispatch Ambulance</span>
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex gap-2 pt-1">
+                    <button
+                      onClick={() => handleDispatch(selectedEmergency.id)}
+                      className="flex-1 py-3.5 px-4 rounded-2xl bg-red-600 hover:bg-red-700 text-white font-black text-xs flex items-center justify-center gap-2 shadow-lg shadow-red-600/30 transition active:scale-95 cursor-pointer"
+                    >
+                      <Send className="w-4 h-4" />
+                      <span>{t('dispatchAmbulance', 'Dispatch Nearest Ambulance')}</span>
+                    </button>
+                  </div>
+                )}
               </div>
             )}
 
@@ -389,7 +503,7 @@ export function AdminDashboard() {
                   <span className="font-black text-sm text-slate-900">{amb.vehicle_number}</span>
                   <span className={`px-2.5 py-1 rounded-full text-[10px] font-black uppercase ${
                     amb.status === 'Available' ? 'bg-emerald-100 text-emerald-800' :
-                    amb.status === 'Dispatched' ? 'bg-amber-100 text-amber-800' : 'bg-slate-200 text-slate-700'
+                    amb.status === 'Dispatched' ? 'bg-amber-100 text-amber-800 animate-pulse' : 'bg-slate-200 text-slate-700'
                   }`}>
                     {amb.status}
                   </span>
@@ -406,6 +520,16 @@ export function AdminDashboard() {
                   <span className="font-bold text-slate-700">{amb.fuel_level}% Battery / Fuel</span>
                   <span className="text-[11px] text-slate-400">GPS: {amb.lat}, {amb.lng}</span>
                 </div>
+
+                {amb.status === 'Dispatched' && amb.assigned_emergency_id && (
+                  <button
+                    onClick={() => handleResolveEmergency(amb.assigned_emergency_id)}
+                    className="w-full mt-2 py-2 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs flex items-center justify-center gap-1.5 transition cursor-pointer"
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    <span>Complete Mission & Mark Available</span>
+                  </button>
+                )}
               </div>
             ))}
           </div>
@@ -415,21 +539,28 @@ export function AdminDashboard() {
       {/* TAB 3: Hospital Medicine Stock */}
       {activeTab === 'medicines' && (
         <div className="rounded-3xl p-6 bg-white border border-slate-100 shadow-soft space-y-4">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
             <div className="flex items-center gap-2">
               <Pill className="w-5 h-5 text-blue-600" />
-              <h3 className="font-extrabold text-base text-slate-900">
-                {t('medicineInventory', 'Hospital Pharmacy & Medicine Inventory')}
-              </h3>
+              <div>
+                <h3 className="font-extrabold text-base text-slate-900">
+                  {t('medicineInventory', 'Hospital Pharmacy & Medicine Inventory')}
+                </h3>
+                <p className="text-xs text-slate-400">
+                  Real-time stock deduction, batch dispense & instant replenishment
+                </p>
+              </div>
             </div>
-            <span className="text-xs font-bold text-slate-400">Stock Threshold Monitor</span>
+            <span className="text-xs font-bold text-slate-500 bg-slate-100 px-3 py-1 rounded-full w-fit">
+              Live Stock Controller
+            </span>
           </div>
 
           <div className="space-y-3">
             {resources?.medicines?.map((med) => (
               <div
                 key={med.id}
-                className="p-4 rounded-2xl bg-slate-50 border border-slate-100 flex items-center justify-between"
+                className="p-4 rounded-2xl bg-slate-50 border border-slate-100 flex flex-col md:flex-row md:items-center justify-between gap-4"
               >
                 <div>
                   <div className="flex items-center gap-2">
@@ -442,22 +573,80 @@ export function AdminDashboard() {
                     </span>
                   </div>
                   <p className="text-xs text-slate-500 mt-0.5">
-                    {med.category} • Minimum safety threshold: {med.min_threshold} {med.unit}
+                    {med.category} • Safety threshold: <span className="font-bold text-slate-700">{med.min_threshold} {med.unit}</span>
                   </p>
                 </div>
 
-                <div className="flex items-center gap-4">
-                  <span className="text-base font-black text-slate-900">
-                    {med.stock_count} {med.unit}
-                  </span>
-                  {med.status !== 'In Stock' && (
+                <div className="flex flex-wrap items-center gap-3">
+                  {/* Minus / Deduct Controls */}
+                  <div className="flex items-center bg-white rounded-xl border border-red-200/80 p-1 shadow-xs">
                     <button
-                      onClick={() => handleRestock(med.id)}
-                      className="px-3.5 py-1.5 rounded-full bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold transition shadow-sm"
+                      onClick={() => handleAdjustStock(med.id, -50)}
+                      title="Deduct 50 units"
+                      disabled={med.stock_count <= 0}
+                      className="px-2 py-1 text-[11px] font-extrabold text-red-600 hover:bg-red-50 rounded-lg disabled:opacity-30 disabled:cursor-not-allowed transition cursor-pointer"
                     >
-                      + Restock 250
+                      -50
                     </button>
-                  )}
+                    <button
+                      onClick={() => handleAdjustStock(med.id, -10)}
+                      title="Deduct 10 units"
+                      disabled={med.stock_count <= 0}
+                      className="px-2 py-1 text-[11px] font-extrabold text-red-600 hover:bg-red-50 rounded-lg disabled:opacity-30 disabled:cursor-not-allowed transition cursor-pointer"
+                    >
+                      -10
+                    </button>
+                    <button
+                      onClick={() => handleAdjustStock(med.id, -1)}
+                      title="Deduct 1 unit"
+                      disabled={med.stock_count <= 0}
+                      className="p-1 text-red-600 hover:bg-red-50 rounded-lg disabled:opacity-30 disabled:cursor-not-allowed transition cursor-pointer"
+                    >
+                      <Minus className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+
+                  {/* Current Stock Count Display */}
+                  <div className="px-3.5 py-1.5 bg-white rounded-xl border border-slate-200 text-center min-w-[95px] shadow-xs">
+                    <span className="text-sm font-black text-slate-900 block leading-tight">
+                      {med.stock_count}
+                    </span>
+                    <span className="text-[10px] font-semibold text-slate-400 block leading-tight">
+                      {med.unit}
+                    </span>
+                  </div>
+
+                  {/* Plus / Add Controls */}
+                  <div className="flex items-center bg-white rounded-xl border border-emerald-200/80 p-1 shadow-xs">
+                    <button
+                      onClick={() => handleAdjustStock(med.id, 1)}
+                      title="Add 1 unit"
+                      className="p-1 text-emerald-600 hover:bg-emerald-50 rounded-lg transition cursor-pointer"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      onClick={() => handleAdjustStock(med.id, 10)}
+                      title="Add 10 units"
+                      className="px-2 py-1 text-[11px] font-extrabold text-emerald-600 hover:bg-emerald-50 rounded-lg transition cursor-pointer"
+                    >
+                      +10
+                    </button>
+                    <button
+                      onClick={() => handleAdjustStock(med.id, 50)}
+                      title="Add 50 units"
+                      className="px-2 py-1 text-[11px] font-extrabold text-emerald-600 hover:bg-emerald-50 rounded-lg transition cursor-pointer"
+                    >
+                      +50
+                    </button>
+                    <button
+                      onClick={() => handleAdjustStock(med.id, 250)}
+                      title="Batch Restock (+250)"
+                      className="px-2.5 py-1 text-[11px] font-black text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition shadow-xs cursor-pointer"
+                    >
+                      +250
+                    </button>
+                  </div>
                 </div>
               </div>
             ))}

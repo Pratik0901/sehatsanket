@@ -110,15 +110,36 @@ def get_demo_users():
             "role": "doctor",
             "username": "doc_ching",
             "name": "Dr. Ching Ming Yang",
-            "description": "Cardiologist (Speaks English & Hindi)",
+            "description": "Cardiologist • 14+ yrs exp • Speaks English & Hindi",
             "doctor_id": "doc_01"
         },
         {
             "role": "doctor",
             "username": "doc_rajesh",
             "name": "Dr. Rajesh Rao",
-            "description": "General Physician (Speaks Kannada, Hindi, Telugu, English)",
+            "description": "General Physician • 16+ yrs exp • Speaks Kannada, Hindi, Telugu, English",
             "doctor_id": "doc_05"
+        },
+        {
+            "role": "doctor",
+            "username": "doc_marc",
+            "name": "Dr. Marc Lee",
+            "description": "Cardiologist • 10+ yrs exp • Translates via Sarvam AI (English & Kannada)",
+            "doctor_id": "doc_02"
+        },
+        {
+            "role": "doctor",
+            "username": "doc_olivia",
+            "name": "Dr. Olivia Bennett",
+            "description": "Therapist & Clinical Psychologist • 8+ yrs exp • Translates via Sarvam AI (English & Telugu)",
+            "doctor_id": "doc_03"
+        },
+        {
+            "role": "doctor",
+            "username": "doc_ethan",
+            "name": "Dr. Ethan Roberts",
+            "description": "Pediatrician • 12+ yrs exp • Translates via Sarvam AI (English & Tamil)",
+            "doctor_id": "doc_04"
         },
         {
             "role": "admin",
