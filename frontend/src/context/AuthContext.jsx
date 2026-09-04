@@ -56,16 +56,18 @@ export function AuthProvider({ children }) {
         localStorage.setItem('sehat_user', JSON.stringify(res.user));
         localStorage.setItem('sehat_token', res.access_token);
       } catch (e) {}
-      if (res.user.preferred_language) {
-        setLanguage(res.user.preferred_language);
+      if (res.user.preferred_language || res.user.lang) {
+        setLanguage(res.user.preferred_language || res.user.lang);
       }
       return res.user;
     } catch (err) {
-      console.warn("API Login failed, using local profile fallback:", err);
-      const match = DEMO_PERSONAS.find(p => p.username === username) || 
-                    DEMO_PERSONAS.find(p => p.role === role) || 
-                    DEMO_PERSONAS[0];
-      return loginProfile(match);
+      console.warn("API Login attempt result:", err);
+      // Fallback only if exact demo username matches default demo password
+      const match = DEMO_PERSONAS.find(p => p.username === username);
+      if (match && password === 'password123') {
+        return loginProfile(match);
+      }
+      throw err;
     }
   };
 
@@ -73,13 +75,20 @@ export function AuthProvider({ children }) {
   const loginProfile = (profile) => {
     if (!profile) return;
     setUser(profile);
+    if (profile.token) {
+      setToken(profile.token);
+    }
     setCurrentPortal('authenticated');
     try {
       sessionStorage.setItem('sehat_user', JSON.stringify(profile));
       localStorage.setItem('sehat_user', JSON.stringify(profile));
+      if (profile.token) {
+        sessionStorage.setItem('sehat_token', profile.token);
+        localStorage.setItem('sehat_token', profile.token);
+      }
     } catch (e) {}
-    if (profile.lang) {
-      setLanguage(profile.lang);
+    if (profile.lang || profile.preferred_language) {
+      setLanguage(profile.lang || profile.preferred_language);
     }
     return profile;
   };

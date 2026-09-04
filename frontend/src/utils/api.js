@@ -32,10 +32,14 @@ export const api = {
     method: 'POST',
     body: JSON.stringify(credentials)
   }),
-  register: (role, data) => fetchWithAuth(`/auth/register/${role}`, {
-    method: 'POST',
-    body: JSON.stringify(data)
-  }),
+  register: (roleOrData, maybeData) => {
+    let role = typeof roleOrData === 'string' ? roleOrData : (roleOrData?.role || 'patient');
+    let payload = typeof roleOrData === 'object' ? roleOrData : (maybeData || {});
+    return fetchWithAuth(`/auth/register/${role}`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+  },
   getDemoUsers: () => fetchWithAuth('/auth/demo-users'),
 
   // Triage

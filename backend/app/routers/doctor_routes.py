@@ -14,6 +14,37 @@ def get_available_doctors(
     language: Optional[str] = Query(None, description="Patient preferred language (en, hi, kn, ta, te)"),
     specialty: Optional[str] = Query(None, description="Filtered medical specialty")
 ):
+    # Synchronize with PostgreSQL to ensure any newly registered doctors are loaded
+    conn = db._get_connection()
+    if conn:
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""
+                SELECT d.id, d.name, d.specialization, d.experience_years, d.rating, 
+                       d.spoken_languages, d.clinic_address, d.session_fee, d.avatar_url, 
+                       d.is_available, d.available_slots, d.assigned_patient_ids,
+                       COALESCE(u.username, d.id) AS username
+                FROM doctors d
+                LEFT JOIN users u ON u.id = d.id OR u.username = d.id;
+                """)
+                rows = cur.fetchall()
+                if rows:
+                    for r in rows:
+                        db.doctors[r[0]] = {
+                            "id": r[0], "name": r[1], "specialization": r[2], "experience_years": r[3],
+                            "rating": r[4], "spoken_languages": r[5] or [], "clinic_address": r[6] or "",
+                            "session_fee": r[7], "avatar_url": r[8] or "https://images.unsplash.com/photo-1622253692010-333f2da6031d?auto=format&fit=crop&w=400&q=80",
+                            "is_available": r[9] if r[9] is not None else True,
+                            "available_slots": r[10] or ["09:00 AM", "11:00 AM", "02:00 PM", "04:30 PM", "06:00 PM"],
+                            "assigned_patient_ids": r[11] or [],
+                            "username": r[12] or r[0],
+                            "is_registered": True
+                        }
+        except Exception as e:
+            print("Notice updating available doctors from PostgreSQL:", e)
+        finally:
+            conn.close()
+
     all_docs = list(db.doctors.values())
     filtered = []
 
@@ -28,7 +59,8 @@ def get_available_doctors(
         if not doc.get("is_available", True):
             continue
         
-        has_lang = language in doc.get("spoken_languages", []) if language else True
+        spoken = [l.lower() for l in doc.get("spoken_languages", [])] if doc.get("spoken_languages") else []
+        has_lang = (language.lower() in spoken) if language else True
         has_spec = (specialty.lower() in doc.get("specialization", "").lower()) if specialty else True
 
         if has_lang and has_spec:

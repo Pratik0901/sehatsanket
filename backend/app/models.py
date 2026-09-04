@@ -13,8 +13,20 @@ class UserRegister(BaseModel):
     username: str
     password: str
     preferred_language: str = "en"
+    # Patient fields
+    age: Optional[int] = 30
+    gender: Optional[str] = "Other"
+    phone: Optional[str] = "+91 99000 11223"
+    medical_history: Optional[List[str]] = []
+    # Doctor fields
     specialization: Optional[str] = None
     spoken_languages: Optional[List[str]] = None
+    experience_years: Optional[int] = 5
+    clinic_address: Optional[str] = None
+    session_fee: Optional[int] = 60
+    avatar_url: Optional[str] = None
+    # Admin fields
+    department: Optional[str] = "Hospital Command"
 
 class TokenResponse(BaseModel):
     access_token: str

@@ -81,7 +81,7 @@ export const DEMO_PERSONAS = [
     badgeText: 'Translates via Sarvam AI',
     doctorId: 'doc_03',
     lang: 'en',
-    avatar: 'https://images.unsplash.com/photo-1594824813591-10c0e7f7881c?auto=format&fit=crop&w=400&q=80'
+    avatar: 'https://images.unsplash.com/photo-1594824813586-77823f66c9bb?auto=format&fit=crop&w=400&q=80'
   },
   {
     id: 'doc_04',

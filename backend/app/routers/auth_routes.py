@@ -1,3 +1,4 @@
+import uuid
 from fastapi import APIRouter, HTTPException, status
 from app.models import UserLogin, UserRegister, TokenResponse
 from app.auth import create_access_token
@@ -7,83 +8,186 @@ router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 @router.post("/register/{role}", response_model=TokenResponse)
 def register(role: str, data: UserRegister):
-    if role not in ["patient", "doctor", "admin"]:
+    role_norm = role.lower()
+    if role_norm not in ["patient", "doctor", "admin"]:
         raise HTTPException(status_code=400, detail="Invalid role. Must be 'patient', 'doctor', or 'admin'.")
 
-    if data.username in db.users:
-        raise HTTPException(status_code=400, detail="Username already exists")
+    # 1. Check uniqueness across memory and Neon PostgreSQL
+    existing = db.users.get(data.username)
+    if not existing:
+        conn = db._get_connection()
+        if conn:
+            try:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT id FROM users WHERE username = %s;", (data.username,))
+                    if cur.fetchone():
+                        existing = True
+            except Exception as e:
+                print("Notice checking existing user in Neon PSQL:", e)
+            finally:
+                conn.close()
+
+    if existing:
+        raise HTTPException(status_code=400, detail=f"Username '{data.username}' already exists. Please choose a different username or sign in.")
+
+    # 2. Generate unique ID for user
+    if role_norm == "patient":
+        user_id = f"p_{uuid.uuid4().hex[:6]}"
+    elif role_norm == "doctor":
+        user_id = f"doc_{uuid.uuid4().hex[:6]}"
+    elif role_norm == "admin":
+        user_id = f"adm_{uuid.uuid4().hex[:6]}"
+    else:
+        user_id = f"u_{uuid.uuid4().hex[:6]}"
 
     new_user = {
-        "id": f"u_{len(db.users) + 1}",
+        "id": user_id,
         "username": data.username,
         "password": data.password,
-        "role": role,
+        "role": role_norm,
         "name": data.name,
-        "preferred_language": data.preferred_language,
-        "specialization": data.specialization,
-        "spoken_languages": data.spoken_languages or ["en"]
+        "preferred_language": data.preferred_language or "en",
+        "specialization": data.specialization if role_norm == "doctor" else None,
+        "spoken_languages": data.spoken_languages or ([data.preferred_language or "en", "en"] if role_norm == "doctor" else [data.preferred_language or "en"])
     }
+
+    # Persist user in Neon PostgreSQL & memory
     db.users[data.username] = new_user
     db.save_user(new_user)
 
-    # If patient, create initial record
-    if role == "patient":
+    # 3. Create role-specific domain record
+    if role_norm == "patient":
         pat_record = {
-            "id": new_user["id"],
+            "id": user_id,
             "name": data.name,
-            "age": 30,
-            "gender": "Other",
-            "phone": "+91 99000 11223",
-            "preferred_language": data.preferred_language,
-            "medical_history": ["New Patient Registration"],
+            "age": data.age or 30,
+            "gender": data.gender or "Other",
+            "phone": data.phone or "+91 99000 11223",
+            "preferred_language": data.preferred_language or "en",
+            "medical_history": data.medical_history if data.medical_history else ["Registered Patient"],
             "active_medications": [],
             "risk_score": 15.0,
             "risk_level": "Low",
-            "risk_factors": ["New registration; baseline profile"],
+            "risk_factors": ["Newly registered patient profile"],
             "post_discharge_followups": []
         }
-        db.patients[new_user["id"]] = pat_record
+        db.patients[user_id] = pat_record
         db.save_patient(pat_record)
 
-    token = create_access_token({"sub": data.username, "role": role, "name": data.name})
+    elif role_norm == "doctor":
+        avatar_pool = [
+            "https://images.unsplash.com/photo-1622253692010-333f2da6031d?auto=format&fit=crop&w=400&q=80",
+            "https://images.unsplash.com/photo-1559839734-2b71ea197ec2?auto=format&fit=crop&w=400&q=80",
+            "https://images.unsplash.com/photo-1612349317150-e413f6a5b16d?auto=format&fit=crop&w=400&q=80",
+            "https://images.unsplash.com/photo-1594824813586-77823f66c9bb?auto=format&fit=crop&w=400&q=80",
+            "https://images.unsplash.com/photo-1537368910025-700350fe46c7?auto=format&fit=crop&w=400&q=80",
+            "https://images.unsplash.com/photo-1638202993928-7267aad84c31?auto=format&fit=crop&w=400&q=80"
+        ]
+        assigned_avatar = data.avatar_url or avatar_pool[abs(hash(data.username)) % len(avatar_pool)]
+        doc_record = {
+            "id": user_id,
+            "name": data.name if data.name.startswith("Dr.") else f"Dr. {data.name}",
+            "specialization": data.specialization or "General Physician",
+            "experience_years": data.experience_years or 5,
+            "rating": 5.0,
+            "spoken_languages": data.spoken_languages or ([data.preferred_language, "en"] if data.preferred_language else ["en", "hi"]),
+            "clinic_address": data.clinic_address or "Apollo Metro Hospital & Clinics",
+            "session_fee": data.session_fee or 60,
+            "avatar_url": assigned_avatar,
+            "is_available": True,
+            "available_slots": ["09:00 AM", "11:00 AM", "02:00 PM", "04:30 PM", "06:00 PM"],
+            "assigned_patient_ids": []
+        }
+        db.doctors[user_id] = doc_record
+        db.save_doctor(doc_record)
+
+    token = create_access_token({"sub": data.username, "role": role_norm, "name": data.name})
+
+    user_payload = {
+        "id": user_id,
+        "username": data.username,
+        "name": data.name,
+        "role": role_norm,
+        "preferred_language": data.preferred_language or "en",
+        "lang": data.preferred_language or "en"
+    }
+    if role_norm == "patient":
+        user_payload["patientId"] = user_id
+    elif role_norm == "doctor":
+        user_payload["doctorId"] = user_id
+        user_payload["specialization"] = data.specialization or "General Physician"
+    elif role_norm == "admin":
+        user_payload["adminId"] = user_id
+
     return {
         "access_token": token,
         "token_type": "bearer",
-        "user": {
-            "id": new_user["id"],
-            "username": new_user["username"],
-            "name": new_user["name"],
-            "role": new_user["role"],
-            "preferred_language": new_user.get("preferred_language", "en")
-        }
+        "user": user_payload
     }
 
 @router.post("/login", response_model=TokenResponse)
 def login(data: UserLogin):
     user = db.users.get(data.username)
+    # If not found in cache, check Neon PostgreSQL
+    if not user:
+        conn = db._get_connection()
+        if conn:
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT id, username, password, role, name, preferred_language, specialization, spoken_languages FROM users WHERE username = %s;",
+                        (data.username,)
+                    )
+                    r = cur.fetchone()
+                    if r:
+                        user = {
+                            "id": r[0],
+                            "username": r[1],
+                            "password": r[2],
+                            "role": r[3],
+                            "name": r[4],
+                            "preferred_language": r[5] or "en",
+                            "specialization": r[6],
+                            "spoken_languages": r[7] or []
+                        }
+                        db.users[data.username] = user
+            except Exception as err:
+                print("Error retrieving user from Neon PSQL:", err)
+            finally:
+                conn.close()
+
     if not user or user["password"] != data.password:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid username or password"
         )
 
-    # If role mismatch, allow flexible persona switching or align
     token = create_access_token({
         "sub": user["username"],
         "role": user["role"],
         "name": user["name"]
     })
+
+    user_payload = {
+        "id": user["id"],
+        "username": user["username"],
+        "name": user["name"],
+        "role": user["role"],
+        "preferred_language": user.get("preferred_language", "en"),
+        "lang": user.get("preferred_language", "en")
+    }
+    if user["role"] == "patient":
+        user_payload["patientId"] = user["id"]
+    elif user["role"] == "doctor":
+        user_payload["doctorId"] = user["id"]
+        user_payload["specialization"] = user.get("specialization", "General Physician")
+    elif user["role"] == "admin":
+        user_payload["adminId"] = user["id"]
+
     return {
         "access_token": token,
         "token_type": "bearer",
-        "user": {
-            "id": user["id"],
-            "username": user["username"],
-            "name": user["name"],
-            "role": user["role"],
-            "preferred_language": user.get("preferred_language", "en"),
-            "specialization": user.get("specialization")
-        }
+        "user": user_payload
     }
 
 @router.get("/demo-users")

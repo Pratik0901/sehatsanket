@@ -16,15 +16,28 @@ import { PrescribedLabTestsCard } from '../components/PrescribedLabTestsCard';
 import { DigitalTwinDashboard } from '../components/digitaltwin/DigitalTwinDashboard';
 
 export function PatientDashboard({ onOpenAiTriage, onOpenEmergency, onOpenVideoConsult, activeTab, setActiveTab }) {
-  const { user } = useAuth();
+  const { user, personas } = useAuth();
   const { currentLanguage, setLanguage, supportedLanguages, t } = useLanguage();
+
+  const defaultDoctors = (personas || []).filter(p => p.role === 'doctor').map(p => ({
+    id: p.id || p.doctorId,
+    name: p.name,
+    specialization: p.specialization,
+    experience_years: p.experience_years || 10,
+    rating: p.rating || 4.8,
+    session_fee: p.session_fee || 60,
+    clinic_address: p.clinic_address || 'Apollo Metro Hospital',
+    avatar_url: p.avatar || 'https://images.unsplash.com/photo-1622253692010-333f2da6031d?auto=format&fit=crop&w=400&q=80',
+    spoken_languages: p.spoken_languages || (p.lang === 'kn' ? ['kn', 'en', 'hi', 'te'] : (p.lang === 'en' && p.name.includes('Ching') ? ['en', 'hi'] : ['en', p.lang || 'hi'])),
+    is_available: true
+  }));
 
   const [internalView, setInternalView] = useState('clinical');
   const dashboardView = activeTab === 'digital_twin' ? 'digital_twin' : internalView;
 
   const [activeFilter, setActiveFilter] = useState('upcoming');
   const [doctorFilter, setDoctorFilter] = useState('all');
-  const [doctors, setDoctors] = useState([]);
+  const [doctors, setDoctors] = useState(defaultDoctors);
   const [selectedDoctor, setSelectedDoctor] = useState(null);
   const [selectedDate, setSelectedDate] = useState(14);
   const [selectedTimeSlot, setSelectedTimeSlot] = useState('12:00 PM');
@@ -64,6 +77,7 @@ export function PatientDashboard({ onOpenAiTriage, onOpenEmergency, onOpenVideoC
     loadPatientLabOrders();
 
     const interval = setInterval(() => {
+      loadDoctors();
       loadNotifications();
       loadPatientData();
       loadPendingPrescriptions();
@@ -301,7 +315,8 @@ export function PatientDashboard({ onOpenAiTriage, onOpenEmergency, onOpenVideoC
   };
 
   const doesDoctorSpeakPatientLang = (doc) => {
-    return doc.spoken_languages?.includes(currentLanguage);
+    if (!doc?.spoken_languages || !Array.isArray(doc.spoken_languages)) return false;
+    return doc.spoken_languages.some(lang => lang?.toString().toLowerCase() === currentLanguage?.toLowerCase());
   };
 
   const handleFilterDoctors = (filterType) => {
@@ -1073,7 +1088,7 @@ export function PatientDashboard({ onOpenAiTriage, onOpenEmergency, onOpenVideoC
                 {selectedDoctor.name}
               </h3>
               <p className="text-xs font-semibold text-emerald-700">
-                {selectedDoctor.specialization} • Speaks {selectedDoctor.spoken_languages.join(', ').toUpperCase()}
+                {selectedDoctor.specialization} • Speaks {(selectedDoctor.spoken_languages || ['en']).join(', ').toUpperCase()}
               </p>
 
               <div className="mt-3 flex items-center gap-3 text-xs font-bold text-slate-600">

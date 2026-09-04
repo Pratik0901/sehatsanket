@@ -254,7 +254,7 @@ class Database:
                 "spoken_languages": ["en", "te"],
                 "clinic_address": "Mind Care Center, Sector 4",
                 "session_fee": 75,
-                "avatar_url": "https://images.unsplash.com/photo-1594824813591-10c0e7f7881c?auto=format&fit=crop&w=400&q=80",
+                "avatar_url": "https://images.unsplash.com/photo-1594824813586-77823f66c9bb?auto=format&fit=crop&w=400&q=80",
                 "is_available": True,
                 "available_slots": ["10:30 AM", "01:00 PM", "03:30 PM", "05:30 PM"],
                 "assigned_patient_ids": []

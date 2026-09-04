@@ -26,15 +26,17 @@ def test_auth_flow():
     assert token_data["user"]["name"] == "Priya Sharma"
 
     # Register a new patient
+    import uuid
+    uniq_user = f"patient_{uuid.uuid4().hex[:6]}"
     reg_resp = client.post("/auth/register/patient", json={
         "name": "Kavita Nair",
-        "username": "patient_kavita",
+        "username": uniq_user,
         "password": "secretpassword",
         "preferred_language": "ta"
     })
     assert reg_resp.status_code == 200
     reg_data = reg_resp.json()
-    assert reg_data["user"]["username"] == "patient_kavita"
+    assert reg_data["user"]["username"] == uniq_user
 
 def test_symptom_triage_flow():
     # 1. Incomplete symptom input should request follow-up

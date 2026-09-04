@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   User, Stethoscope, Building2, Lock, ArrowLeft, ArrowRight, 
   CheckCircle2, AlertTriangle, ShieldCheck, Sparkles, Key, Check, Plus, Star, MapPin
@@ -16,17 +16,69 @@ export function CategoryLoginPage({ category, onBack }) {
   const [password, setPassword] = useState('password123');
   const [errorMsg, setErrorMsg] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [liveDoctors, setLiveDoctors] = useState([]);
 
-  // Registration state for new patients
+  // Registration state
+  // 1. Patient
   const [regName, setRegName] = useState('');
+  const [regUsername, setRegUsername] = useState('');
+  const [regPassword, setRegPassword] = useState('password123');
   const [regAge, setRegAge] = useState('28');
   const [regGender, setRegGender] = useState('Female');
   const [regPhone, setRegPhone] = useState('+91 98765 12345');
   const [regLang, setRegLang] = useState(currentLanguage || 'en');
   const [regHistory, setRegHistory] = useState('Seasonal allergies, mild asthma');
 
-  // Filter profiles strictly belonging to this category
-  const categoryProfiles = personas.filter(p => p.role === category);
+  // 2. Doctor
+  const [regDocName, setRegDocName] = useState('');
+  const [regDocUsername, setRegDocUsername] = useState('');
+  const [regDocPassword, setRegDocPassword] = useState('password123');
+  const [regDocSpecialty, setRegDocSpecialty] = useState('Cardiologist');
+  const [regDocExp, setRegDocExp] = useState('10');
+  const [regDocFee, setRegDocFee] = useState('80');
+  const [regDocAddress, setRegDocAddress] = useState('Apollo Metro Hospital, Block C');
+  const [regDocLang, setRegDocLang] = useState('en');
+
+  // 3. Admin
+  const [regAdminName, setRegAdminName] = useState('');
+  const [regAdminUsername, setRegAdminUsername] = useState('');
+  const [regAdminPassword, setRegAdminPassword] = useState('password123');
+  const [regAdminDept, setRegAdminDept] = useState('Hospital Emergency & Fleet Command');
+
+  useEffect(() => {
+    if (category === 'doctor') {
+      api.getDoctors().then(res => {
+        if (res && res.doctors) {
+          setLiveDoctors(res.doctors);
+        }
+      }).catch(() => {});
+    }
+  }, [category, activeTab]);
+
+  // Filter profiles strictly belonging to this category and merge live doctors
+  const defaultCategoryProfiles = personas.filter(p => p.role === category);
+  const categoryProfiles = category === 'doctor' && liveDoctors.length > 0
+    ? liveDoctors.map(doc => {
+        const matchingPersona = personas.find(p => p.id === doc.id || p.doctorId === doc.id);
+        const spoken = doc.spoken_languages || ['en'];
+        const speaksHi = spoken.some(l => l.toLowerCase() === 'hi');
+        return {
+          id: doc.id,
+          username: matchingPersona?.username || doc.username || doc.id,
+          name: doc.name,
+          role: 'doctor',
+          doctorId: doc.id,
+          specialization: doc.specialization,
+          rating: doc.rating || 5.0,
+          experience_years: doc.experience_years || 5,
+          session_fee: doc.session_fee || 60,
+          clinic_address: doc.clinic_address || 'Apollo Metro Hospital',
+          avatar: doc.avatar_url || matchingPersona?.avatar || 'https://images.unsplash.com/photo-1622253692010-333f2da6031d?auto=format&fit=crop&w=400&q=80',
+          badgeText: speaksHi ? 'Speaks HI' : 'Translates via Sarvam AI',
+          spoken_languages: spoken
+        };
+      })
+    : defaultCategoryProfiles;
 
   const getCategoryConfig = () => {
     switch (category) {
@@ -84,7 +136,7 @@ export function CategoryLoginPage({ category, onBack }) {
     try {
       await login(username.trim(), password, category);
     } catch (err) {
-      setErrorMsg('Invalid credentials. Please verify your details.');
+      setErrorMsg(err.message || 'Invalid credentials. Please verify your details.');
     } finally {
       setIsLoading(false);
     }
@@ -95,54 +147,72 @@ export function CategoryLoginPage({ category, onBack }) {
     loginProfile(profile);
   };
 
-  const handleRegisterPatient = async (e) => {
+  const handleRegister = async (e) => {
     e.preventDefault();
-    if (!regName.trim()) {
-      setErrorMsg('Please provide your full name.');
-      return;
-    }
     setIsLoading(true);
     setErrorMsg(null);
     try {
-      const newUsername = `patient_${regName.toLowerCase().replace(/\s+/g, '_')}`;
-      const res = await api.register({
-        username: newUsername,
-        password: password || 'password123',
-        role: 'patient',
-        name: regName.trim(),
-        age: parseInt(regAge) || 30,
-        gender: regGender,
-        phone: regPhone,
-        preferred_language: regLang,
-        medical_history: regHistory ? [regHistory] : []
-      });
+      let payload = {};
+      if (category === 'patient') {
+        if (!regName.trim()) {
+          setErrorMsg('Please provide your full name.');
+          setIsLoading(false);
+          return;
+        }
+        const uName = regUsername.trim() || `patient_${regName.toLowerCase().replace(/[^a-z0-9]/g, '_')}`;
+        payload = {
+          name: regName.trim(),
+          username: uName,
+          password: regPassword || 'password123',
+          role: 'patient',
+          age: parseInt(regAge) || 30,
+          gender: regGender,
+          phone: regPhone,
+          preferred_language: regLang,
+          medical_history: regHistory ? [regHistory] : ["Registered Patient"]
+        };
+      } else if (category === 'doctor') {
+        if (!regDocName.trim()) {
+          setErrorMsg('Please enter doctor name.');
+          setIsLoading(false);
+          return;
+        }
+        const cleanName = regDocName.trim().startsWith('Dr.') ? regDocName.trim() : `Dr. ${regDocName.trim()}`;
+        const uName = regDocUsername.trim() || `doc_${regDocName.toLowerCase().replace(/[^a-z0-9]/g, '_')}`;
+        payload = {
+          name: cleanName,
+          username: uName,
+          password: regDocPassword || 'password123',
+          role: 'doctor',
+          specialization: regDocSpecialty,
+          experience_years: parseInt(regDocExp) || 5,
+          session_fee: parseInt(regDocFee) || 60,
+          clinic_address: regDocAddress,
+          preferred_language: regDocLang,
+          spoken_languages: [regDocLang, 'en']
+        };
+      } else if (category === 'admin') {
+        if (!regAdminName.trim()) {
+          setErrorMsg('Please enter administrator name.');
+          setIsLoading(false);
+          return;
+        }
+        const uName = regAdminUsername.trim() || `admin_${regAdminName.toLowerCase().replace(/[^a-z0-9]/g, '_')}`;
+        payload = {
+          name: regAdminName.trim(),
+          username: uName,
+          password: regAdminPassword || 'password123',
+          role: 'admin',
+          preferred_language: 'en',
+          department: regAdminDept
+        };
+      }
 
-      const newProfile = {
-        id: res.user?.id || `p_${Date.now().toString().slice(-4)}`,
-        role: 'patient',
-        username: newUsername,
-        name: regName.trim(),
-        subtext: `${regLang.toUpperCase()} • Registered Patient`,
-        patientId: res.user?.id || `p_${Date.now().toString().slice(-4)}`,
-        lang: regLang,
-        avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=200&q=80'
-      };
-
-      loginProfile(newProfile);
+      const res = await api.register(category, payload);
+      loginProfile(res.user);
     } catch (err) {
       console.warn("Registration error:", err);
-      // Fallback local profile registration
-      const newProfile = {
-        id: `p_${Date.now().toString().slice(-4)}`,
-        role: 'patient',
-        username: `patient_${regName.toLowerCase().replace(/\s+/g, '_')}`,
-        name: regName.trim(),
-        subtext: `${regLang.toUpperCase()} • Registered Patient`,
-        patientId: `p_${Date.now().toString().slice(-4)}`,
-        lang: regLang,
-        avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=200&q=80'
-      };
-      loginProfile(newProfile);
+      setErrorMsg(err.message || 'Registration failed. Username may already exist.');
     } finally {
       setIsLoading(false);
     }
@@ -189,27 +259,25 @@ export function CategoryLoginPage({ category, onBack }) {
         {/* Content Body */}
         <div className="p-6 sm:p-8 space-y-8">
           
-          {/* Tab Switcher for Patients (Login vs Register) */}
-          {category === 'patient' && (
-            <div className="flex items-center p-1 bg-slate-100 rounded-2xl max-w-sm mx-auto text-xs font-black">
-              <button
-                onClick={() => { setActiveTab('login'); setErrorMsg(null); }}
-                className={`flex-1 py-2.5 rounded-xl transition ${
-                  activeTab === 'login' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-500 hover:text-slate-800'
-                }`}
-              >
-                Sign In to Existing Profile
-              </button>
-              <button
-                onClick={() => { setActiveTab('register'); setErrorMsg(null); }}
-                className={`flex-1 py-2.5 rounded-xl transition ${
-                  activeTab === 'register' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-500 hover:text-slate-800'
-                }`}
-              >
-                Register New Patient
-              </button>
-            </div>
-          )}
+          {/* Tab Switcher (Login vs Register) */}
+          <div className="flex items-center p-1 bg-slate-100 rounded-2xl max-w-sm mx-auto text-xs font-black">
+            <button
+              onClick={() => { setActiveTab('login'); setErrorMsg(null); }}
+              className={`flex-1 py-2.5 rounded-xl transition ${
+                activeTab === 'login' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              Sign In to Profile
+            </button>
+            <button
+              onClick={() => { setActiveTab('register'); setErrorMsg(null); }}
+              className={`flex-1 py-2.5 rounded-xl transition ${
+                activeTab === 'register' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              {category === 'doctor' ? 'Register New Doctor' : category === 'admin' ? 'Register New Admin' : 'Register New Patient'}
+            </button>
+          </div>
 
           {errorMsg && (
             <div className="p-3.5 rounded-2xl bg-red-50 border border-red-200 text-xs font-bold text-red-800 flex items-center gap-2">
@@ -376,99 +444,350 @@ export function CategoryLoginPage({ category, onBack }) {
             </div>
           )}
 
-          {/* 3. NEW PATIENT REGISTRATION FORM */}
-          {category === 'patient' && activeTab === 'register' && (
-            <form onSubmit={handleRegisterPatient} className="space-y-4 max-w-xl">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label className="text-xs font-extrabold text-slate-700 block mb-1">
-                    Full Name *
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={regName}
-                    onChange={(e) => setRegName(e.target.value)}
-                    placeholder="e.g. Ananya Rao"
-                    className="w-full px-4 py-2.5 rounded-2xl bg-slate-50 border border-slate-200 text-sm focus:bg-white focus:ring-2 focus:ring-brand-emerald focus:outline-none"
-                  />
-                </div>
+          {/* 3. ROLE-SPECIFIC REGISTRATION FORMS */}
+          {activeTab === 'register' && (
+            <div>
+              <div className="mb-4">
+                <h3 className="text-sm font-black text-slate-900 flex items-center gap-2">
+                  <span>Register New {category.toUpperCase()} Account</span>
+                  <span className="text-[11px] font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                    Saved to Neon Cloud DB
+                  </span>
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Your credentials and profile details will be securely saved to PostgreSQL so you can sign in anytime.
+                </p>
+              </div>
 
-                <div>
-                  <label className="text-xs font-extrabold text-slate-700 block mb-1">
-                    Age & Gender *
-                  </label>
-                  <div className="flex gap-2">
-                    <input
-                      type="number"
-                      value={regAge}
-                      onChange={(e) => setRegAge(e.target.value)}
-                      className="w-20 px-3 py-2.5 rounded-2xl bg-slate-50 border border-slate-200 text-sm text-center font-bold"
-                    />
-                    <select
-                      value={regGender}
-                      onChange={(e) => setRegGender(e.target.value)}
-                      className="flex-1 px-3 py-2.5 rounded-2xl bg-slate-50 border border-slate-200 text-sm font-semibold"
-                    >
-                      <option value="Female">Female</option>
-                      <option value="Male">Male</option>
-                      <option value="Other">Other</option>
-                    </select>
+              {/* Patient Registration */}
+              {category === 'patient' && (
+                <form onSubmit={handleRegister} className="space-y-4 max-w-xl">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="text-xs font-extrabold text-slate-700 block mb-1">
+                        Full Name *
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={regName}
+                        onChange={(e) => setRegName(e.target.value)}
+                        placeholder="e.g. Ananya Rao"
+                        className="w-full px-4 py-2.5 rounded-2xl bg-slate-50 border border-slate-200 text-sm focus:bg-white focus:ring-2 focus:ring-emerald-600 focus:outline-none"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-extrabold text-slate-700 block mb-1">
+                        Username *
+                      </label>
+                      <input
+                        type="text"
+                        value={regUsername}
+                        onChange={(e) => setRegUsername(e.target.value)}
+                        placeholder="e.g. ananya_rao"
+                        className="w-full px-4 py-2.5 rounded-2xl bg-slate-50 border border-slate-200 text-sm focus:bg-white focus:ring-2 focus:ring-emerald-600 focus:outline-none"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-extrabold text-slate-700 block mb-1">
+                        Password *
+                      </label>
+                      <input
+                        type="password"
+                        required
+                        value={regPassword}
+                        onChange={(e) => setRegPassword(e.target.value)}
+                        placeholder="••••••••"
+                        className="w-full px-4 py-2.5 rounded-2xl bg-slate-50 border border-slate-200 text-sm focus:bg-white focus:ring-2 focus:ring-emerald-600 focus:outline-none"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-extrabold text-slate-700 block mb-1">
+                        Age & Gender *
+                      </label>
+                      <div className="flex gap-2">
+                        <input
+                          type="number"
+                          value={regAge}
+                          onChange={(e) => setRegAge(e.target.value)}
+                          className="w-20 px-3 py-2.5 rounded-2xl bg-slate-50 border border-slate-200 text-sm text-center font-bold"
+                        />
+                        <select
+                          value={regGender}
+                          onChange={(e) => setRegGender(e.target.value)}
+                          className="flex-1 px-3 py-2.5 rounded-2xl bg-slate-50 border border-slate-200 text-sm font-semibold"
+                        >
+                          <option value="Female">Female</option>
+                          <option value="Male">Male</option>
+                          <option value="Other">Other</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-extrabold text-slate-700 block mb-1">
+                        Contact Phone Number
+                      </label>
+                      <input
+                        type="tel"
+                        value={regPhone}
+                        onChange={(e) => setRegPhone(e.target.value)}
+                        placeholder="+91 98765 43210"
+                        className="w-full px-4 py-2.5 rounded-2xl bg-slate-50 border border-slate-200 text-sm"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-extrabold text-slate-700 block mb-1">
+                        Preferred Language
+                      </label>
+                      <select
+                        value={regLang}
+                        onChange={(e) => setRegLang(e.target.value)}
+                        className="w-full px-4 py-2.5 rounded-2xl bg-slate-50 border border-slate-200 text-sm font-semibold"
+                      >
+                        <option value="en">English</option>
+                        <option value="hi">Hindi (हिन्दी)</option>
+                        <option value="kn">Kannada (ಕನ್ನಡ)</option>
+                        <option value="ta">Tamil (தமிழ்)</option>
+                        <option value="te">Telugu (తెలుగు)</option>
+                        <option value="mr">Marathi (मराठी)</option>
+                        <option value="bn">Bengali (বাংলা)</option>
+                      </select>
+                    </div>
                   </div>
-                </div>
 
-                <div>
-                  <label className="text-xs font-extrabold text-slate-700 block mb-1">
-                    Contact Phone Number
-                  </label>
-                  <input
-                    type="tel"
-                    value={regPhone}
-                    onChange={(e) => setRegPhone(e.target.value)}
-                    className="w-full px-4 py-2.5 rounded-2xl bg-slate-50 border border-slate-200 text-sm"
-                  />
-                </div>
+                  <div>
+                    <label className="text-xs font-extrabold text-slate-700 block mb-1">
+                      Prior Medical Conditions & Known Allergies
+                    </label>
+                    <textarea
+                      rows={2}
+                      value={regHistory}
+                      onChange={(e) => setRegHistory(e.target.value)}
+                      placeholder="e.g. Asthma, Penicillin allergy, Diabetes"
+                      className="w-full px-4 py-2.5 rounded-2xl bg-slate-50 border border-slate-200 text-sm focus:bg-white focus:outline-none"
+                    />
+                  </div>
 
-                <div>
-                  <label className="text-xs font-extrabold text-slate-700 block mb-1">
-                    Preferred Regional Language
-                  </label>
-                  <select
-                    value={regLang}
-                    onChange={(e) => setRegLang(e.target.value)}
-                    className="w-full px-4 py-2.5 rounded-2xl bg-slate-50 border border-slate-200 text-sm font-semibold"
+                  <button
+                    type="submit"
+                    disabled={isLoading}
+                    className="w-full py-3.5 px-5 rounded-2xl bg-brand-emerald hover:bg-emerald-700 active:scale-95 text-white font-black text-sm flex items-center justify-center gap-2 shadow-lg shadow-brand-emerald/30 transition"
                   >
-                    <option value="en">English</option>
-                    <option value="hi">Hindi (हिन्दी)</option>
-                    <option value="kn">Kannada (ಕನ್ನಡ)</option>
-                    <option value="ta">Tamil (தமிழ்)</option>
-                    <option value="te">Telugu (తెలుగు)</option>
-                  </select>
-                </div>
-              </div>
+                    <Plus className="w-4 h-4" />
+                    <span>{isLoading ? 'Creating Account...' : 'Create Patient Profile & Log In'}</span>
+                  </button>
+                </form>
+              )}
 
-              <div>
-                <label className="text-xs font-extrabold text-slate-700 block mb-1">
-                  Prior Medical Conditions & Known Allergies
-                </label>
-                <textarea
-                  rows={2}
-                  value={regHistory}
-                  onChange={(e) => setRegHistory(e.target.value)}
-                  placeholder="e.g. Asthma, Penicillin allergy, Diabetes"
-                  className="w-full px-4 py-2.5 rounded-2xl bg-slate-50 border border-slate-200 text-sm focus:bg-white focus:outline-none"
-                />
-              </div>
+              {/* Doctor Registration */}
+              {category === 'doctor' && (
+                <form onSubmit={handleRegister} className="space-y-4 max-w-xl">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="text-xs font-extrabold text-slate-700 block mb-1">
+                        Doctor Full Name *
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={regDocName}
+                        onChange={(e) => setRegDocName(e.target.value)}
+                        placeholder="e.g. Dr. Rajesh Rao"
+                        className="w-full px-4 py-2.5 rounded-2xl bg-slate-50 border border-slate-200 text-sm focus:bg-white focus:ring-2 focus:ring-blue-600 focus:outline-none"
+                      />
+                    </div>
 
-              <button
-                type="submit"
-                disabled={isLoading}
-                className="w-full py-3.5 px-5 rounded-2xl bg-brand-emerald hover:bg-emerald-700 active:scale-95 text-white font-black text-sm flex items-center justify-center gap-2 shadow-lg shadow-brand-emerald/30 transition"
-              >
-                <Plus className="w-4 h-4" />
-                <span>Create Isolated Patient Profile & Log In</span>
-              </button>
-            </form>
+                    <div>
+                      <label className="text-xs font-extrabold text-slate-700 block mb-1">
+                        Doctor Username / ID *
+                      </label>
+                      <input
+                        type="text"
+                        value={regDocUsername}
+                        onChange={(e) => setRegDocUsername(e.target.value)}
+                        placeholder="e.g. doc_rajesh"
+                        className="w-full px-4 py-2.5 rounded-2xl bg-slate-50 border border-slate-200 text-sm focus:bg-white focus:ring-2 focus:ring-blue-600 focus:outline-none"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-extrabold text-slate-700 block mb-1">
+                        Password *
+                      </label>
+                      <input
+                        type="password"
+                        required
+                        value={regDocPassword}
+                        onChange={(e) => setRegDocPassword(e.target.value)}
+                        placeholder="••••••••"
+                        className="w-full px-4 py-2.5 rounded-2xl bg-slate-50 border border-slate-200 text-sm focus:bg-white focus:ring-2 focus:ring-blue-600 focus:outline-none"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-extrabold text-slate-700 block mb-1">
+                        Medical Specialization *
+                      </label>
+                      <select
+                        value={regDocSpecialty}
+                        onChange={(e) => setRegDocSpecialty(e.target.value)}
+                        className="w-full px-4 py-2.5 rounded-2xl bg-slate-50 border border-slate-200 text-sm font-semibold"
+                      >
+                        <option value="Cardiologist">Cardiologist</option>
+                        <option value="General Physician">General Physician</option>
+                        <option value="Pediatrician">Pediatrician</option>
+                        <option value="Neurologist">Neurologist</option>
+                        <option value="Orthopedic Surgeon">Orthopedic Surgeon</option>
+                        <option value="Therapist & Clinical Psychologist">Therapist & Clinical Psychologist</option>
+                        <option value="General Surgeon">General Surgeon</option>
+                        <option value="Dermatologist">Dermatologist</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-extrabold text-slate-700 block mb-1">
+                        Experience & Fee ($ / session)
+                      </label>
+                      <div className="flex gap-2">
+                        <input
+                          type="number"
+                          value={regDocExp}
+                          onChange={(e) => setRegDocExp(e.target.value)}
+                          placeholder="Years"
+                          title="Years of experience"
+                          className="w-24 px-3 py-2.5 rounded-2xl bg-slate-50 border border-slate-200 text-sm text-center font-bold"
+                        />
+                        <input
+                          type="number"
+                          value={regDocFee}
+                          onChange={(e) => setRegDocFee(e.target.value)}
+                          placeholder="Fee $"
+                          title="Session Fee in USD"
+                          className="flex-1 px-3 py-2.5 rounded-2xl bg-slate-50 border border-slate-200 text-sm text-center font-bold"
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-extrabold text-slate-700 block mb-1">
+                        Primary Consultation Language
+                      </label>
+                      <select
+                        value={regDocLang}
+                        onChange={(e) => setRegDocLang(e.target.value)}
+                        className="w-full px-4 py-2.5 rounded-2xl bg-slate-50 border border-slate-200 text-sm font-semibold"
+                      >
+                        <option value="en">English</option>
+                        <option value="hi">Hindi (हिन्दी)</option>
+                        <option value="kn">Kannada (ಕನ್ನಡ)</option>
+                        <option value="ta">Tamil (தமிழ்)</option>
+                        <option value="te">Telugu (తెలుగు)</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-extrabold text-slate-700 block mb-1">
+                      Hospital / Clinic Address
+                    </label>
+                    <input
+                      type="text"
+                      value={regDocAddress}
+                      onChange={(e) => setRegDocAddress(e.target.value)}
+                      placeholder="e.g. Apollo Metro Hospital, Block C, Bangalore"
+                      className="w-full px-4 py-2.5 rounded-2xl bg-slate-50 border border-slate-200 text-sm"
+                    />
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={isLoading}
+                    className="w-full py-3.5 px-5 rounded-2xl bg-blue-600 hover:bg-blue-700 active:scale-95 text-white font-black text-sm flex items-center justify-center gap-2 shadow-lg shadow-blue-600/30 transition"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>{isLoading ? 'Registering Doctor...' : 'Create Doctor Profile & Log In'}</span>
+                  </button>
+                </form>
+              )}
+
+              {/* Admin Registration */}
+              {category === 'admin' && (
+                <form onSubmit={handleRegister} className="space-y-4 max-w-xl">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="text-xs font-extrabold text-slate-700 block mb-1">
+                        Admin Full Name *
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={regAdminName}
+                        onChange={(e) => setRegAdminName(e.target.value)}
+                        placeholder="e.g. Vikram Malhotra"
+                        className="w-full px-4 py-2.5 rounded-2xl bg-slate-50 border border-slate-200 text-sm focus:bg-white focus:ring-2 focus:ring-amber-600 focus:outline-none"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-extrabold text-slate-700 block mb-1">
+                        Admin Username / ID *
+                      </label>
+                      <input
+                        type="text"
+                        value={regAdminUsername}
+                        onChange={(e) => setRegAdminUsername(e.target.value)}
+                        placeholder="e.g. admin_vikram"
+                        className="w-full px-4 py-2.5 rounded-2xl bg-slate-50 border border-slate-200 text-sm focus:bg-white focus:ring-2 focus:ring-amber-600 focus:outline-none"
+                      />
+                    </div>
+
+                    <div className="sm:col-span-2">
+                      <label className="text-xs font-extrabold text-slate-700 block mb-1">
+                        Password *
+                      </label>
+                      <input
+                        type="password"
+                        required
+                        value={regAdminPassword}
+                        onChange={(e) => setRegAdminPassword(e.target.value)}
+                        placeholder="••••••••"
+                        className="w-full px-4 py-2.5 rounded-2xl bg-slate-50 border border-slate-200 text-sm focus:bg-white focus:ring-2 focus:ring-amber-600 focus:outline-none"
+                      />
+                    </div>
+
+                    <div className="sm:col-span-2">
+                      <label className="text-xs font-extrabold text-slate-700 block mb-1">
+                        Assigned Command Unit / Department
+                      </label>
+                      <select
+                        value={regAdminDept}
+                        onChange={(e) => setRegAdminDept(e.target.value)}
+                        className="w-full px-4 py-2.5 rounded-2xl bg-slate-50 border border-slate-200 text-sm font-semibold"
+                      >
+                        <option value="Hospital Emergency & Fleet Command">Hospital Emergency & Fleet Command</option>
+                        <option value="ICU Bed & Critical Resource Command">ICU Bed & Critical Resource Command</option>
+                        <option value="Pharmacy & Medical Inventory Operations">Pharmacy & Medical Inventory Operations</option>
+                        <option value="General Hospital Operations">General Hospital Operations</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={isLoading}
+                    className="w-full py-3.5 px-5 rounded-2xl bg-amber-600 hover:bg-amber-700 active:scale-95 text-white font-black text-sm flex items-center justify-center gap-2 shadow-lg shadow-amber-600/30 transition"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>{isLoading ? 'Registering Admin...' : 'Create Admin Profile & Log In'}</span>
+                  </button>
+                </form>
+              )}
+            </div>
           )}
 
         </div>
