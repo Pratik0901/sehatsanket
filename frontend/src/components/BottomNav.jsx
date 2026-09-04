@@ -14,65 +14,68 @@ export function BottomNav({ activeTab, setActiveTab, onOpenAiTriage }) {
         {/* Tab 1: Home / Dashboard */}
         <button
           onClick={() => setActiveTab('home')}
-          className={`flex flex-col items-center justify-center w-12 h-12 rounded-full transition ${
-            activeTab === 'home' ? 'text-brand-emerald' : 'text-slate-400 hover:text-slate-600'
+          className={`flex flex-col items-center justify-center w-11 h-11 rounded-full transition cursor-pointer ${
+            activeTab === 'home' ? 'text-brand-emerald font-bold' : 'text-slate-400 hover:text-slate-600'
           }`}
           title="Dashboard"
         >
-          <Home className="w-5 h-5" />
-          <span className="text-[10px] font-medium mt-0.5">Home</span>
+          <Home className="w-4 h-4" />
+          <span className="text-[9px] font-medium mt-0.5">Home</span>
         </button>
 
-        {/* Tab 2: Calendar / Schedule */}
+        {/* Tab 2: Digital Twin (Biometric Telemetry Simulation) */}
         <button
-          onClick={() => setActiveTab('schedule')}
-          className={`flex flex-col items-center justify-center w-12 h-12 rounded-full transition ${
-            activeTab === 'schedule' ? 'text-brand-emerald' : 'text-slate-400 hover:text-slate-600'
+          onClick={() => setActiveTab('digital_twin')}
+          className={`flex flex-col items-center justify-center w-11 h-11 rounded-full transition cursor-pointer relative ${
+            activeTab === 'digital_twin' ? 'text-brand-emerald font-black scale-105' : 'text-slate-400 hover:text-slate-600'
           }`}
-          title="Schedule"
+          title="Patient Digital Twin"
         >
-          <Calendar className="w-5 h-5" />
-          <span className="text-[10px] font-medium mt-0.5">Schedule</span>
+          <span className="text-sm leading-none">🧬</span>
+          <span className="text-[9px] font-bold mt-0.5">Twin</span>
+          {activeTab === 'digital_twin' && (
+            <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping" />
+          )}
         </button>
 
         {/* CENTER FLOATING AI ASSISTANT PILL BUTTON (Matching Screenshot) */}
         <button
           onClick={onOpenAiTriage}
-          className="flex items-center gap-2 px-4 py-2.5 rounded-full bg-gradient-to-r from-brand-emerald via-emerald-600 to-teal-600 text-white shadow-lg shadow-emerald-600/30 hover:shadow-emerald-600/50 hover:scale-105 active:scale-95 transition-all duration-200 animate-pulse-glow"
+          className="flex items-center gap-1.5 px-3.5 py-2 rounded-full bg-gradient-to-r from-brand-emerald via-emerald-600 to-teal-600 text-white shadow-lg shadow-emerald-600/30 hover:shadow-emerald-600/50 hover:scale-105 active:scale-95 transition-all duration-200 animate-pulse-glow cursor-pointer"
           title="Open AI Multilingual Symptom Triage"
         >
-          <div className="w-6 h-6 rounded-full bg-white/20 flex items-center justify-center">
-            <Sparkles className="w-3.5 h-3.5 text-white" />
+          <div className="w-5 h-5 rounded-full bg-white/20 flex items-center justify-center">
+            <Sparkles className="w-3 h-3 text-white" />
           </div>
-          <span className="text-xs font-bold tracking-wide">
+          <span className="text-[11px] font-bold tracking-wide">
             {t('aiAssistant', 'AI Assistant')}
           </span>
         </button>
 
-        {/* Tab 3: Directory / Resources */}
+        {/* Tab 3: Calendar / Schedule */}
+        <button
+          onClick={() => setActiveTab('schedule')}
+          className={`flex flex-col items-center justify-center w-11 h-11 rounded-full transition cursor-pointer ${
+            activeTab === 'schedule' ? 'text-brand-emerald font-bold' : 'text-slate-400 hover:text-slate-600'
+          }`}
+          title="Schedule"
+        >
+          <Calendar className="w-4 h-4" />
+          <span className="text-[9px] font-medium mt-0.5">Schedule</span>
+        </button>
+
+        {/* Tab 4: Directory / Resources */}
         <button
           onClick={() => setActiveTab('explore')}
-          className={`flex flex-col items-center justify-center w-12 h-12 rounded-full transition ${
-            activeTab === 'explore' ? 'text-brand-emerald' : 'text-slate-400 hover:text-slate-600'
+          className={`flex flex-col items-center justify-center w-11 h-11 rounded-full transition cursor-pointer ${
+            activeTab === 'explore' ? 'text-brand-emerald font-bold' : 'text-slate-400 hover:text-slate-600'
           }`}
           title="Explore Doctors or Hospital"
         >
-          {role === 'admin' ? <ShieldAlert className="w-5 h-5" /> : <Stethoscope className="w-5 h-5" />}
-          <span className="text-[10px] font-medium mt-0.5">
+          {role === 'admin' ? <ShieldAlert className="w-4 h-4" /> : <Stethoscope className="w-4 h-4" />}
+          <span className="text-[9px] font-medium mt-0.5">
             {role === 'admin' ? 'Fleet' : 'Doctors'}
           </span>
-        </button>
-
-        {/* Tab 4: Messages / Consults */}
-        <button
-          onClick={() => setActiveTab('consultations')}
-          className={`flex flex-col items-center justify-center w-12 h-12 rounded-full transition ${
-            activeTab === 'consultations' ? 'text-brand-emerald' : 'text-slate-400 hover:text-slate-600'
-          }`}
-          title="Consultations"
-        >
-          <MessageSquare className="w-5 h-5" />
-          <span className="text-[10px] font-medium mt-0.5">Consults</span>
         </button>
 
       </nav>

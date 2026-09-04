@@ -257,4 +257,90 @@ def test_video_consultation_call_lifecycle():
     active_after = client.get("/consultation/call/active").json()
     assert not any(c["consultationId"] == "test_consult_42" for c in active_after["active_calls"])
 
+def test_digital_twin_endpoints():
+    # 1. Normal vitals analysis
+    normal_payload = {
+        "heart_rate": 78,
+        "blood_pressure_systolic": 120,
+        "blood_pressure_diastolic": 80,
+        "oxygen_saturation": 98,
+        "temperature": 98.6,
+        "respiratory_rate": 16,
+        "glucose": 95,
+        "patient_id": "p_01"
+    }
+    resp = client.post("/digital-twin/analyze", json=normal_payload)
+    assert resp.status_code == 200
+    dt = resp.json()["digital_twin"]
+    assert dt["risk_level"] == "Stable"
+    assert dt["risk_score"] < 25.0
+
+    # 2. Elevated Pyrexia + Tachycardia
+    fever_payload = {
+        "heart_rate": 112,
+        "blood_pressure_systolic": 124,
+        "blood_pressure_diastolic": 82,
+        "oxygen_saturation": 97,
+        "temperature": 101.8,
+        "respiratory_rate": 20,
+        "glucose": 105,
+        "patient_id": "p_01"
+    }
+    fever_resp = client.post("/digital-twin/analyze", json=fever_payload)
+    assert fever_resp.status_code == 200
+    fever_dt = fever_resp.json()["digital_twin"]
+    assert fever_dt["risk_level"] in ["Elevated", "High"]
+    assert len(fever_dt["detected_abnormalities"]) >= 2
+
+    # 3. High Risk Hypoxemic Respiratory Distress
+    hypox_payload = {
+        "heart_rate": 118,
+        "blood_pressure_systolic": 132,
+        "blood_pressure_diastolic": 86,
+        "oxygen_saturation": 88,
+        "temperature": 99.2,
+        "respiratory_rate": 28,
+        "glucose": 110,
+        "patient_id": "p_01"
+    }
+    hypox_resp = client.post("/digital-twin/analyze", json=hypox_payload)
+    assert hypox_resp.status_code == 200
+    hypox_dt = hypox_resp.json()["digital_twin"]
+    assert hypox_dt["risk_level"] == "High"
+    assert hypox_dt["emergency_warning"] is True
+
+    # 4. Simulation Endpoint
+    sim_resp = client.post("/digital-twin/simulate", json={
+        "current_vitals": normal_payload,
+        "future_vitals": hypox_payload
+    })
+    assert sim_resp.status_code == 200
+    sim_data = sim_resp.json()
+    assert sim_data["comparison"]["level_changed"] is True
+    assert sim_data["comparison"]["risk_score_delta"] > 0
+
+    # 5. Submit Treatment Consideration for Doctor Review
+    treatment_resp = client.post("/digital-twin/submit-treatment-consideration", json={
+        "patient_id": "p_01",
+        "patient_name": "Priya Sharma",
+        "vitals_snapshot": fever_payload,
+        "risk_level": "Elevated",
+        "risk_score": 62.5,
+        "medication_consideration": {
+            "title": "Antipyretic Protocol",
+            "candidateMedication": "Paracetamol 650mg Oral",
+            "dosageInstructions": "1 tablet SOS",
+            "rationale": "High fever with tachycardia",
+            "suggestedDoctorId": "doc_05",
+            "suggestedDoctor": "Dr. Rajesh Rao"
+        }
+    })
+    assert treatment_resp.status_code == 200
+    tx_data = treatment_resp.json()
+    assert tx_data["status"] == "success"
+    presc_id = tx_data["prescription_id"]
+    assert presc_id in db.prescriptions
+    assert db.prescriptions[presc_id]["doctor_confirmation_status"] == "Pending"
+
+
 

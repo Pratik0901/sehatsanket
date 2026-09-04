@@ -204,7 +204,53 @@ def create_tables(cur):
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
     """)
-    print("All 11 clinical tables created successfully.")
+
+    # 12. lab_orders
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS lab_orders (
+        id VARCHAR(64) PRIMARY KEY,
+        consultation_id VARCHAR(64),
+        patient_id VARCHAR(64) NOT NULL,
+        patient_name VARCHAR(128) NOT NULL,
+        doctor_id VARCHAR(64) NOT NULL,
+        doctor_name VARCHAR(128) NOT NULL,
+        tests JSONB DEFAULT '[]'::jsonb,
+        medications JSONB DEFAULT '[]'::jsonb,
+        remedies JSONB DEFAULT '[]'::jsonb,
+        clinical_notes TEXT,
+        status VARCHAR(64) DEFAULT 'pending_patient_selection',
+        selected_lab JSONB,
+        instrument_details JSONB,
+        precision_accuracy_report JSONB,
+        booking_details JSONB,
+        created_at VARCHAR(64),
+        updated_at VARCHAR(64)
+    );
+    """)
+
+    # 13. consultation_feedback
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS consultation_feedback (
+        id VARCHAR(64) PRIMARY KEY,
+        consultation_id VARCHAR(64),
+        patient_id VARCHAR(64) NOT NULL,
+        patient_name VARCHAR(128) NOT NULL,
+        doctor_id VARCHAR(64) NOT NULL,
+        doctor_name VARCHAR(128) NOT NULL,
+        rating INT DEFAULT 5,
+        tags JSONB DEFAULT '[]'::jsonb,
+        feedback_text TEXT,
+        language VARCHAR(16) DEFAULT 'en',
+        translated_text TEXT,
+        sentiment VARCHAR(32) DEFAULT 'Positive',
+        sentiment_score FLOAT DEFAULT 0.95,
+        voice_input_used BOOLEAN DEFAULT FALSE,
+        skipped BOOLEAN DEFAULT FALSE,
+        created_at VARCHAR(64)
+    );
+    """)
+    print("All 13 clinical tables created successfully.")
+
 
 def seed_data(cur):
     print("Seeding initial dataset into Neon PostgreSQL...")
@@ -451,13 +497,71 @@ def seed_data(cur):
             ap.get("language_pair", ""), ap.get("created_at", "")
         ))
 
+    # 11. Lab Orders
+    for ord_id, o in seed_source.lab_orders.items():
+        cur.execute("""
+        INSERT INTO lab_orders (id, consultation_id, patient_id, patient_name, doctor_id, doctor_name, tests, medications, remedies, clinical_notes, status, selected_lab, instrument_details, precision_accuracy_report, booking_details, created_at, updated_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (id) DO UPDATE SET
+            consultation_id = EXCLUDED.consultation_id,
+            patient_id = EXCLUDED.patient_id,
+            patient_name = EXCLUDED.patient_name,
+            doctor_id = EXCLUDED.doctor_id,
+            doctor_name = EXCLUDED.doctor_name,
+            tests = EXCLUDED.tests,
+            medications = EXCLUDED.medications,
+            remedies = EXCLUDED.remedies,
+            clinical_notes = EXCLUDED.clinical_notes,
+            status = EXCLUDED.status,
+            selected_lab = EXCLUDED.selected_lab,
+            instrument_details = EXCLUDED.instrument_details,
+            precision_accuracy_report = EXCLUDED.precision_accuracy_report,
+            booking_details = EXCLUDED.booking_details,
+            updated_at = EXCLUDED.updated_at;
+        """, (
+            o["id"], o.get("consultation_id"), o["patient_id"], o["patient_name"],
+            o["doctor_id"], o["doctor_name"], Json(o.get("tests", [])),
+            Json(o.get("medications", [])), Json(o.get("remedies", [])),
+            o.get("clinical_notes"), o.get("status", "pending_patient_selection"),
+            Json(o.get("selected_lab")) if o.get("selected_lab") else None,
+            Json(o.get("instrument_details")) if o.get("instrument_details") else None,
+            Json(o.get("precision_accuracy_report")) if o.get("precision_accuracy_report") else None,
+            Json(o.get("booking_details")) if o.get("booking_details") else None,
+            o.get("created_at"), o.get("updated_at")
+        ))
+
+    # 13. Consultation Feedback
+    for fb_id, fb in seed_source.consultation_feedback.items():
+        cur.execute("""
+        INSERT INTO consultation_feedback (id, consultation_id, patient_id, patient_name, doctor_id, doctor_name, rating, tags, feedback_text, language, translated_text, sentiment, sentiment_score, voice_input_used, skipped, created_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (id) DO UPDATE SET
+            rating = EXCLUDED.rating,
+            tags = EXCLUDED.tags,
+            feedback_text = EXCLUDED.feedback_text,
+            language = EXCLUDED.language,
+            translated_text = EXCLUDED.translated_text,
+            sentiment = EXCLUDED.sentiment,
+            sentiment_score = EXCLUDED.sentiment_score,
+            voice_input_used = EXCLUDED.voice_input_used,
+            skipped = EXCLUDED.skipped;
+        """, (
+            fb["id"], fb.get("consultation_id"), fb.get("patient_id"), fb.get("patient_name"),
+            fb.get("doctor_id"), fb.get("doctor_name"), fb.get("rating", 5),
+            Json(fb.get("tags", [])), fb.get("feedback_text", ""), fb.get("language", "en"),
+            fb.get("translated_text", ""), fb.get("sentiment", "Positive"),
+            fb.get("sentiment_score", 0.95), fb.get("voice_input_used", False),
+            fb.get("skipped", False), fb.get("created_at")
+        ))
+
     print("Data seeded successfully into all tables.")
 
 def verify_counts(cur):
     tables = [
         "users", "patients", "doctors", "ambulances", "medicines",
         "admitted_patients", "prescriptions", "emergencies",
-        "consultations", "appointments", "triage_sessions"
+        "consultations", "appointments", "triage_sessions", "lab_orders",
+        "consultation_feedback"
     ]
     print("\n--- Verification Summary in Neon PostgreSQL ---")
     all_ok = True
@@ -465,7 +569,8 @@ def verify_counts(cur):
         cur.execute(f"SELECT COUNT(*) FROM {t};")
         count = cur.fetchone()[0]
         print(f"Table '{t}': {count} rows")
-        if count == 0 and t != "triage_sessions":
+        if count == 0 and t not in ["triage_sessions"]:
+
             all_ok = False
     return all_ok
 

@@ -62,6 +62,9 @@ export const api = {
     body: JSON.stringify(bookingData)
   }),
   getDoctorSchedule: (doctorId) => fetchWithAuth(`/doctors/${doctorId}/schedule`),
+  cancelAppointment: (appointmentId) => fetchWithAuth(`/appointments/${appointmentId}/cancel`, {
+    method: 'POST'
+  }),
 
   // Prescriptions
   getPendingPrescriptions: (doctorId = null) => {
@@ -129,5 +132,73 @@ export const api = {
   getPatientNotifications: (patientId) => fetchWithAuth(`/patients/${patientId}/notifications`),
   markNotificationRead: (patientId, notifId) => fetchWithAuth(`/patients/${patientId}/notifications/${notifId}/read`, {
     method: 'POST'
+  }),
+
+  // Diagnostic Lab Tests & Instrument Precision
+  getLabCatalog: () => fetchWithAuth('/lab-tests/catalog'),
+  recommendLaboratories: (testIds) => fetchWithAuth('/lab-tests/recommend-laboratories', {
+    method: 'POST',
+    body: JSON.stringify({ test_ids: testIds })
+  }),
+  createPostConsultationOrder: (orderData) => fetchWithAuth('/consultations/post-consultation-order', {
+    method: 'POST',
+    body: JSON.stringify(orderData)
+  }),
+  selectLaboratory: (selectionData) => fetchWithAuth('/lab-tests/select-lab', {
+    method: 'POST',
+    body: JSON.stringify(selectionData)
+  }),
+  getPatientLabOrders: (patientId) => fetchWithAuth(`/lab-tests/orders/patient/${patientId}`),
+  getDoctorLabOrders: (doctorId) => fetchWithAuth(`/lab-tests/orders/doctor/${doctorId}`),
+  getLabOrder: (orderId) => fetchWithAuth(`/lab-tests/orders/${orderId}`),
+
+  // Multilingual Consultation Feedback
+  submitConsultationFeedback: (feedbackData) => fetchWithAuth('/consultation/feedback', {
+    method: 'POST',
+    body: JSON.stringify(feedbackData)
+  }),
+  getDoctorConsultationFeedback: (doctorId = 'doc_05') => fetchWithAuth(`/consultation/feedback/doctor/${doctorId}`),
+  getAllConsultationFeedback: () => fetchWithAuth('/consultation/feedback/all'),
+
+  // Patient Digital Twin
+  analyzeDigitalTwin: (vitals) => fetchWithAuth('/digital-twin/analyze', {
+    method: 'POST',
+    body: JSON.stringify({
+      heart_rate: vitals.heartRate,
+      blood_pressure_systolic: vitals.systolicBp,
+      blood_pressure_diastolic: vitals.diastolicBp,
+      oxygen_saturation: vitals.spo2,
+      temperature: vitals.temperature,
+      respiratory_rate: vitals.respiratoryRate,
+      glucose: vitals.glucose
+    })
+  }),
+  simulateDigitalTwin: (currentVitals, futureVitals) => fetchWithAuth('/digital-twin/simulate', {
+    method: 'POST',
+    body: JSON.stringify({
+      current_vitals: {
+        heart_rate: currentVitals.heartRate,
+        blood_pressure_systolic: currentVitals.systolicBp,
+        blood_pressure_diastolic: currentVitals.diastolicBp,
+        oxygen_saturation: currentVitals.spo2,
+        temperature: currentVitals.temperature,
+        respiratory_rate: currentVitals.respiratoryRate,
+        glucose: currentVitals.glucose
+      },
+      future_vitals: {
+        heart_rate: futureVitals.heartRate,
+        blood_pressure_systolic: futureVitals.systolicBp,
+        blood_pressure_diastolic: futureVitals.diastolicBp,
+        oxygen_saturation: futureVitals.spo2,
+        temperature: futureVitals.temperature,
+        respiratory_rate: futureVitals.respiratoryRate,
+        glucose: futureVitals.glucose
+      }
+    })
+  }),
+  submitDigitalTwinTreatment: (data) => fetchWithAuth('/digital-twin/submit-treatment-consideration', {
+    method: 'POST',
+    body: JSON.stringify(data)
   })
 };
+

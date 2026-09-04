@@ -3,12 +3,13 @@ import {
   X, Mic, MicOff, Video, VideoOff, PhoneOff, PhoneCall, PhoneIncoming, MessageSquare, 
   Sparkles, Globe, Volume2, VolumeX, Send, FileText, CheckCircle, RefreshCw, UserCheck,
   Languages, Play, RotateCcw, Activity, Maximize2, Minimize2, Grid, Layout,
-  Sliders, ShieldCheck, HelpCircle, ChevronRight, MessageCircle, User
+  Sliders, ShieldCheck, HelpCircle, ChevronRight, MessageCircle, User,
+  Microscope, FlaskConical, Building2, Gauge, Award, Plus, Trash2, CheckCircle2, Pill
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
 import { api } from '../utils/api';
-import { startListening, stopListening, speakText, isSpeechRecognitionSupported } from '../utils/speech';
+import { startListening, stopListening, speakText, cancelSpeech, isSpeechRecognitionSupported } from '../utils/speech';
 
 export function VideoConsultationModal({ 
   isOpen, 
@@ -21,12 +22,12 @@ export function VideoConsultationModal({
   const { currentLanguage, setLanguage, supportedLanguages, t } = useLanguage();
 
   // Distinct Doctor & Patient identity
-  const isDoctorUser = role === 'doctor';
+  const isDoctorUser = role === 'doctor' || user?.role === 'doctor';
   const effectiveDoctorName = isDoctorUser ? (user?.name || doctorName) : doctorName;
   const effectivePatientName = !isDoctorUser ? (user?.name || patientName) : patientName;
 
-  // Active speaking role fixed to the logged-in user's true identity
-  const activeSpeakerRole = isDoctorUser ? 'doctor' : 'patient';
+  // Active speaking role in simulator (allows toggling during sandbox testing)
+  const [activeSpeakerRole, setActiveSpeakerRole] = useState(isDoctorUser ? 'doctor' : 'patient');
   
   // Real Hardware Controls
   const [isMicOn, setIsMicOn] = useState(true);
@@ -34,7 +35,23 @@ export function VideoConsultationModal({
   const [isTtsActive, setIsTtsActive] = useState(true);
   const [hasCameraStream, setHasCameraStream] = useState(false);
   const [callDuration, setCallDuration] = useState(0);
-  const [layoutMode, setLayoutMode] = useState('grid');
+  const [layoutMode, setLayoutMode] = useState('grid'); // Default to Split Grid so both Doctor and Patient are always visible side-by-side
+  const [isSwapped, setIsSwapped] = useState(false);
+
+  useEffect(() => {
+    if (isOpen) {
+      setLayoutMode('grid'); // Ensure both Doctor & Patient are immediately visible side-by-side
+      setIsSwapped(false);
+      setActiveSpeakerRole(isDoctorUser ? 'doctor' : 'patient');
+      if (isDoctorUser) {
+        setIsPeerConnected(false);
+        setHasRemotePeerStream(false);
+      } else {
+        setIsPeerConnected(true);
+      }
+    }
+  }, [isOpen, consultationId, isDoctorUser]);
+
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isCaptionsVisible, setIsCaptionsVisible] = useState(true);
 
@@ -44,15 +61,22 @@ export function VideoConsultationModal({
   const [isDoctorSpeaking, setIsDoctorSpeaking] = useState(false);
   const [audioPlayingTarget, setAudioPlayingTarget] = useState(null);
 
-  // Language barrier configuration
+  // Language barrier configuration (Doctor: English/Hindi, Patient: Kannada/Tamil/Telugu/Hindi)
   const [doctorLanguage, setDoctorLanguage] = useState('en');
-  const [patientLanguage, setPatientLanguage] = useState(user?.preferred_language || currentLanguage || 'kn');
+  const [patientLanguage, setPatientLanguage] = useState(() => {
+    if (!isDoctorUser) {
+      return user?.preferred_language || (currentLanguage && currentLanguage !== 'en' ? currentLanguage : (user?.name?.toLowerCase().includes('ramesh') ? 'kn' : 'hi'));
+    }
+    const pName = (patientName || '').toLowerCase();
+    if (pName.includes('ramesh')) return 'kn';
+    if (pName.includes('priya')) return 'hi';
+    return (currentLanguage && currentLanguage !== 'en') ? currentLanguage : 'hi';
+  });
 
   // Video & Stream Refs
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
-  const doctorCanvasRef = useRef(null);
-  const patientCanvasRef = useRef(null);
+  const remoteAudioRef = useRef(null);
   const localStreamRef = useRef(null);
   const remoteStreamRef = useRef(null);
   const audioContextRef = useRef(null);
@@ -73,15 +97,120 @@ export function VideoConsultationModal({
   const isEndingCallRef = useRef(false);
   const captionTimeoutRef = useRef(null);
 
-  // Active Live Subtitle Caption (empty until conversation is made)
+  // Active Live Subtitle Caption
   const [currentCaption, setCurrentCaption] = useState(null);
 
-  // Conversation history (empty until conversation is made)
-  const [transcript, setTranscript] = useState([]);
+  // Real-Time Live Speaking & Transcription Tracking
+  const [localLiveSpeech, setLocalLiveSpeech] = useState('');
+  const [remoteLiveSpeech, setRemoteLiveSpeech] = useState(null);
+  const speechRecognitionActiveRef = useRef(false);
 
+  // Conversation history
+  const [transcript, setTranscript] = useState([]);
   const [inputText, setInputText] = useState('');
   const [isListeningSpeech, setIsListeningSpeech] = useState(false);
   const [isTranslating, setIsTranslating] = useState(false);
+
+  // In-Call Doctor Prescription & Lab Ordering State
+  const [isInCallRxOpen, setIsInCallRxOpen] = useState(false);
+  const [inCallCatalogTests, setInCallCatalogTests] = useState([]);
+  const [inCallSelectedTests, setInCallSelectedTests] = useState(['t_cbc', 't_lft']);
+  const [inCallMeds, setInCallMeds] = useState([
+    { name: "Paracetamol 650mg", dosage: "1 tab", frequency: "SOS after food" },
+    { name: "Pantoprazole 40mg", dosage: "1 tab", frequency: "Once daily before breakfast" }
+  ]);
+  const [newMedName, setNewMedName] = useState('');
+  const [newMedDosage, setNewMedDosage] = useState('');
+  const [inCallNotes, setInCallNotes] = useState("Recommended blood tests to monitor liver recovery and infection markers.");
+  const [isSubmittingInCallRx, setIsSubmittingInCallRx] = useState(false);
+  const [inCallRxSuccess, setInCallRxSuccess] = useState(null);
+
+  const handleOpenInCallRx = async () => {
+    setIsInCallRxOpen(true);
+    if (inCallCatalogTests.length === 0) {
+      try {
+        const cat = await api.getLabCatalog();
+        setInCallCatalogTests(cat?.tests || cat || []);
+      } catch (e) {
+        console.warn("Catalog load failed", e);
+      }
+    }
+  };
+
+  const handleAddInCallMed = () => {
+    if (!newMedName.trim()) return;
+    setInCallMeds(prev => [...prev, { name: newMedName.trim(), dosage: newMedDosage.trim() || '1 dose', frequency: 'Twice daily' }]);
+    setNewMedName('');
+    setNewMedDosage('');
+  };
+
+  const handleRemoveInCallMed = (index) => {
+    setInCallMeds(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const handleToggleInCallTest = (id) => {
+    setInCallSelectedTests(prev => 
+      prev.includes(id) ? prev.filter(t => t !== id) : [...prev, id]
+    );
+  };
+
+  const handleSendInCallRx = async () => {
+    if (inCallSelectedTests.length === 0 && inCallMeds.length === 0) {
+      alert("Please select at least one medication or lab test.");
+      return;
+    }
+
+    setIsSubmittingInCallRx(true);
+    try {
+      const selectedTestObjects = inCallCatalogTests
+        .filter(t => inCallSelectedTests.includes(t.id))
+        .map(t => ({
+          id: t.id,
+          name: t.name,
+          category: t.category,
+          clinical_significance: t.clinical_significance
+        }));
+
+      const payload = {
+        consultation_id: consultationId || "consult_01",
+        patient_id: "p_01",
+        doctor_id: user?.doctorId || user?.id || 'doc_05',
+        doctor_name: effectiveDoctorName,
+        medications: inCallMeds,
+        remedies: [
+          "Adequate hydration (2.5L daily)",
+          "Rest and observe symptom changes",
+          "Follow up once lab reports are generated"
+        ],
+        clinical_notes: inCallNotes,
+        lab_tests: selectedTestObjects
+      };
+
+      await api.createPostConsultationOrder(payload);
+
+      try {
+        const chan = new BroadcastChannel('sehatsanketh_telehealth_global_signaling');
+        chan.postMessage({
+          type: 'LAB_ORDER_ISSUED',
+          order_id: 'new_order',
+          doctorName: effectiveDoctorName,
+          patientName: effectivePatientName,
+          testCount: selectedTestObjects.length
+        });
+        setTimeout(() => chan.close(), 1500);
+      } catch (e) {}
+
+      setInCallRxSuccess(`✓ Order Transmitted! Prescription & ${selectedTestObjects.length} Lab Tests sent to ${effectivePatientName}. Accredited laboratories ranked by precision are ready.`);
+      setTimeout(() => {
+        setInCallRxSuccess(null);
+        setIsInCallRxOpen(false);
+      }, 3000);
+    } catch (err) {
+      alert("Error sending prescription & lab order: " + err.message);
+    } finally {
+      setIsSubmittingInCallRx(false);
+    }
+  };
 
   // Synchronize with App Language Context
   useEffect(() => {
@@ -97,266 +226,6 @@ export function VideoConsultationModal({
     }
   }, []);
 
-  // Continuous 60-FPS Animation Rendering for Both Doctor & Patient Canvases
-  useEffect(() => {
-    if (!isOpen) return;
-
-    let mounted = true;
-    let frameCount = 0;
-
-    const drawDoctorAvatar = (ctx, fc, isSpeaking) => {
-      // Clinical Room Background
-      const grad = ctx.createLinearGradient(0, 0, 640, 360);
-      grad.addColorStop(0, '#1E293B');
-      grad.addColorStop(0.5, '#0F172A');
-      grad.addColorStop(1, '#134E4A');
-      ctx.fillStyle = grad;
-      ctx.fillRect(0, 0, 640, 360);
-
-      // Hospital Heart Rate monitor
-      ctx.fillStyle = '#022c22';
-      ctx.fillRect(440, 25, 175, 95);
-      ctx.strokeStyle = '#059669';
-      ctx.lineWidth = 2;
-      ctx.strokeRect(440, 25, 175, 95);
-      
-      // ECG line
-      ctx.beginPath();
-      ctx.strokeStyle = '#34d399';
-      ctx.lineWidth = 2;
-      const ecgOffset = (fc * 3) % 175;
-      for (let x = 445; x < 610; x += 15) {
-        const y = 72 + Math.sin((x + ecgOffset) * 0.1) * ((x % 45 === 0) ? 20 : 3);
-        if (x === 445) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
-      }
-      ctx.stroke();
-
-      ctx.fillStyle = '#10b981';
-      ctx.font = 'bold 11px sans-serif';
-      ctx.fillText("ECG 74 BPM  SpO2 99%", 450, 48);
-
-      // Doctor Breathing Simulation
-      const breathOffset = Math.sin(fc * 0.05) * 3;
-      const headCenter = { x: 320, y: 155 + breathOffset };
-
-      // Shoulders / White Coat
-      ctx.fillStyle = '#FFFFFF';
-      ctx.beginPath();
-      ctx.ellipse(320, 340 + breathOffset, 175, 120, 0, 0, Math.PI * 2);
-      ctx.fill();
-
-      // Stethoscope around neck
-      ctx.strokeStyle = '#334155';
-      ctx.lineWidth = 6;
-      ctx.beginPath();
-      ctx.arc(320, 230 + breathOffset, 55, 0.2 * Math.PI, 0.8 * Math.PI);
-      ctx.stroke();
-      ctx.fillStyle = '#94A3B8';
-      ctx.beginPath();
-      ctx.arc(320, 275 + breathOffset, 12, 0, Math.PI * 2);
-      ctx.fill();
-
-      // Shirt / Blue Tie
-      ctx.fillStyle = '#0284c7';
-      ctx.beginPath();
-      ctx.moveTo(310, 220 + breathOffset);
-      ctx.lineTo(330, 220 + breathOffset);
-      ctx.lineTo(325, 290 + breathOffset);
-      ctx.lineTo(315, 290 + breathOffset);
-      ctx.closePath();
-      ctx.fill();
-
-      // Neck
-      ctx.fillStyle = '#DDA17E';
-      ctx.fillRect(298, headCenter.y + 45, 44, 35);
-
-      // Head / Face
-      ctx.fillStyle = '#F3C5A5';
-      ctx.beginPath();
-      ctx.ellipse(headCenter.x, headCenter.y, 55, 68, 0, 0, Math.PI * 2);
-      ctx.fill();
-
-      // Hair
-      ctx.fillStyle = '#1E293B';
-      ctx.beginPath();
-      ctx.arc(headCenter.x, headCenter.y - 25, 56, Math.PI, 0);
-      ctx.fill();
-
-      // Eyes (Blinking every ~3.5 seconds)
-      const isBlinking = fc % 120 < 6;
-      ctx.fillStyle = '#1E293B';
-      if (isBlinking) {
-        ctx.fillRect(headCenter.x - 28, headCenter.y - 8, 16, 2.5);
-        ctx.fillRect(headCenter.x + 12, headCenter.y - 8, 16, 2.5);
-      } else {
-        ctx.beginPath();
-        ctx.arc(headCenter.x - 20, headCenter.y - 6, 5, 0, Math.PI * 2);
-        ctx.arc(headCenter.x + 20, headCenter.y - 6, 5, 0, Math.PI * 2);
-        ctx.fill();
-      }
-
-      // Eyeglasses
-      ctx.strokeStyle = '#475569';
-      ctx.lineWidth = 2.5;
-      ctx.strokeRect(headCenter.x - 34, headCenter.y - 18, 28, 22);
-      ctx.strokeRect(headCenter.x + 6, headCenter.y - 18, 28, 22);
-      ctx.beginPath();
-      ctx.moveTo(headCenter.x - 6, headCenter.y - 7);
-      ctx.lineTo(headCenter.x + 6, headCenter.y - 7);
-      ctx.stroke();
-
-      // Mouth (Animated lips sync when speaking)
-      ctx.fillStyle = '#9f1239';
-      if (isSpeaking) {
-        const mouthOpen = Math.abs(Math.sin(fc * 0.35)) * 10 + 3;
-        ctx.beginPath();
-        ctx.ellipse(headCenter.x, headCenter.y + 35, 14, mouthOpen, 0, 0, Math.PI * 2);
-        ctx.fill();
-      } else {
-        ctx.beginPath();
-        ctx.arc(headCenter.x, headCenter.y + 32, 12, 0.1 * Math.PI, 0.9 * Math.PI);
-        ctx.lineWidth = 2.5;
-        ctx.strokeStyle = '#9f1239';
-        ctx.stroke();
-      }
-
-      // Watermark
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.85)';
-      ctx.font = 'bold 12px sans-serif';
-      ctx.fillText(`${effectiveDoctorName} • Consultant Physician`, 20, 340);
-    };
-
-    const drawPatientAvatar = (ctx, fc, isSpeaking) => {
-      // Warm Patient Room Background
-      const grad = ctx.createLinearGradient(0, 0, 640, 360);
-      grad.addColorStop(0, '#0F172A');
-      grad.addColorStop(0.5, '#1E1B4B');
-      grad.addColorStop(1, '#064E3B');
-      ctx.fillStyle = grad;
-      ctx.fillRect(0, 0, 640, 360);
-
-      // Window blinds
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.05)';
-      ctx.fillRect(40, 25, 140, 160);
-      for (let i = 35; i < 185; i += 20) {
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
-        ctx.strokeRect(40, i, 140, 2);
-      }
-
-      // Patient Home Pulse Oximeter & BP Monitor
-      ctx.fillStyle = '#064e3b';
-      ctx.fillRect(440, 25, 175, 95);
-      ctx.strokeStyle = '#10b981';
-      ctx.lineWidth = 2;
-      ctx.strokeRect(440, 25, 175, 95);
-
-      // Pulse waveform
-      ctx.beginPath();
-      ctx.strokeStyle = '#34d399';
-      ctx.lineWidth = 2;
-      const pulseOffset = (fc * 2.5) % 175;
-      for (let x = 445; x < 610; x += 15) {
-        const y = 72 + Math.sin((x + pulseOffset) * 0.12) * ((x % 45 === 0) ? 18 : 3);
-        if (x === 445) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
-      }
-      ctx.stroke();
-
-      ctx.fillStyle = '#34d399';
-      ctx.font = 'bold 11px sans-serif';
-      ctx.fillText("Pulse 72 BPM  SpO2 98%", 450, 48);
-
-      // Patient Breathing Simulation
-      const breathOffset = Math.sin(fc * 0.04) * 2.5;
-      const headCenter = { x: 320, y: 155 + breathOffset };
-
-      // Shoulders / Comfortable Attire (Teal top)
-      ctx.fillStyle = '#0f766e';
-      ctx.beginPath();
-      ctx.ellipse(320, 340 + breathOffset, 175, 120, 0, 0, Math.PI * 2);
-      ctx.fill();
-
-      // Neck
-      ctx.fillStyle = '#C68B59';
-      ctx.fillRect(298, headCenter.y + 45, 44, 35);
-
-      // Face
-      ctx.fillStyle = '#DDA17E';
-      ctx.beginPath();
-      ctx.ellipse(headCenter.x, headCenter.y, 52, 64, 0, 0, Math.PI * 2);
-      ctx.fill();
-
-      // Long Dark Hair
-      ctx.fillStyle = '#171717';
-      ctx.beginPath();
-      ctx.arc(headCenter.x, headCenter.y - 15, 60, Math.PI * 0.8, Math.PI * 2.2);
-      ctx.fill();
-      ctx.fillRect(headCenter.x - 58, headCenter.y - 15, 18, 90);
-      ctx.fillRect(headCenter.x + 40, headCenter.y - 15, 18, 90);
-
-      // Eyes (Blinking every ~3.5 seconds)
-      const isBlinking = fc % 130 < 6;
-      ctx.fillStyle = '#171717';
-      if (isBlinking) {
-        ctx.fillRect(headCenter.x - 26, headCenter.y - 6, 14, 2.5);
-        ctx.fillRect(headCenter.x + 12, headCenter.y - 6, 14, 2.5);
-      } else {
-        ctx.beginPath();
-        ctx.arc(headCenter.x - 18, headCenter.y - 6, 5, 0, Math.PI * 2);
-        ctx.arc(headCenter.x + 18, headCenter.y - 6, 5, 0, Math.PI * 2);
-        ctx.fill();
-      }
-
-      // Mouth (Animated lips sync when speaking)
-      ctx.fillStyle = '#be123c';
-      if (isSpeaking) {
-        const mouthOpen = Math.abs(Math.sin(fc * 0.35)) * 9 + 3;
-        ctx.beginPath();
-        ctx.ellipse(headCenter.x, headCenter.y + 32, 12, mouthOpen, 0, 0, Math.PI * 2);
-        ctx.fill();
-      } else {
-        ctx.beginPath();
-        ctx.arc(headCenter.x, headCenter.y + 30, 10, 0.1 * Math.PI, 0.9 * Math.PI);
-        ctx.lineWidth = 2;
-        ctx.strokeStyle = '#be123c';
-        ctx.stroke();
-      }
-
-      // Watermark
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.85)';
-      ctx.font = 'bold 12px sans-serif';
-      ctx.fillText(`${effectivePatientName} • Patient Live Feed`, 20, 340);
-    };
-
-    const renderLoop = () => {
-      if (!mounted) return;
-      frameCount++;
-
-      // Paint Doctor Canvas
-      const docCanvas = doctorCanvasRef.current;
-      if (docCanvas) {
-        const ctx = docCanvas.getContext('2d');
-        drawDoctorAvatar(ctx, frameCount, isDoctorSpeaking);
-      }
-
-      // Paint Patient Canvas
-      const patCanvas = patientCanvasRef.current;
-      if (patCanvas) {
-        const ctx = patCanvas.getContext('2d');
-        drawPatientAvatar(ctx, frameCount, isPatientSpeaking);
-      }
-
-      requestAnimationFrame(renderLoop);
-    };
-
-    renderLoop();
-
-    return () => {
-      mounted = false;
-    };
-  }, [isOpen, isDoctorSpeaking, isPatientSpeaking, effectiveDoctorName, effectivePatientName]);
-
   // Reset call termination guard and clear captions on modal open
   useEffect(() => {
     if (isOpen) {
@@ -366,80 +235,64 @@ export function VideoConsultationModal({
     }
   }, [isOpen]);
 
-  // Automatically fade out floating subtitle overlay after 14s of silence
+  // Automatically fade out floating subtitle overlay after 16s of silence
   useEffect(() => {
     if (currentCaption) {
       if (captionTimeoutRef.current) clearTimeout(captionTimeoutRef.current);
       captionTimeoutRef.current = setTimeout(() => {
         setCurrentCaption(null);
-      }, 14000);
+      }, 16000);
     }
     return () => {
       if (captionTimeoutRef.current) clearTimeout(captionTimeoutRef.current);
     };
   }, [currentCaption]);
 
-  // Keep remote video attached to stream whenever hasRemotePeerStream or stream reference updates
+  // Scroll transcript to bottom
   useEffect(() => {
-    if (remoteVideoRef.current && remoteStreamRef.current) {
-      if (remoteVideoRef.current.srcObject !== remoteStreamRef.current) {
-        remoteVideoRef.current.srcObject = remoteStreamRef.current;
-      }
-      remoteVideoRef.current.play().catch(e => {
-        console.log("Remote video play caught:", e);
-      });
+    if (transcriptEndRef.current) {
+      transcriptEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
-  }, [hasRemotePeerStream, isPeerConnected]);
+  }, [transcript]);
 
-  // Keep local video attached to stream when physical camera is active
+  // Keep remote video and audio attached to stream
+  useEffect(() => {
+    const targetStream = remoteStreamRef.current || (hasHardwareCamera && isVideoOn ? localStreamRef.current : null);
+    if (targetStream) {
+      if (remoteVideoRef.current && remoteVideoRef.current.srcObject !== targetStream) {
+        remoteVideoRef.current.srcObject = targetStream;
+        remoteVideoRef.current.play().catch(() => {});
+      }
+      if (remoteStreamRef.current && remoteAudioRef.current && remoteAudioRef.current.srcObject !== remoteStreamRef.current) {
+        remoteAudioRef.current.srcObject = remoteStreamRef.current;
+        remoteAudioRef.current.play().catch(() => {});
+      }
+    }
+  }, [hasRemotePeerStream, isPeerConnected, hasCameraStream, hasHardwareCamera, isVideoOn]);
+
+  // Keep local video attached to stream
   useEffect(() => {
     if (localVideoRef.current && localStreamRef.current && hasHardwareCamera) {
       if (localVideoRef.current.srcObject !== localStreamRef.current) {
         localVideoRef.current.srcObject = localStreamRef.current;
       }
-      localVideoRef.current.play().catch(e => {
-        console.log("Local video play caught:", e);
-      });
+      localVideoRef.current.play().catch(() => {});
     }
   }, [hasCameraStream, hasHardwareCamera, isVideoOn]);
 
-  // Immediate Call Termination and Complete Hardware Clean-up
+  // Immediate Call Termination and Hardware Clean-up
   const handleEndCall = useCallback(() => {
     if (isEndingCallRef.current) return;
     isEndingCallRef.current = true;
 
-    try {
-      if ('speechSynthesis' in window) {
-        window.speechSynthesis.cancel();
-      }
-    } catch (e) {}
-
-    try {
-      stopListening();
-      setIsListeningSpeech(false);
-    } catch (e) {}
-
-    if (animFrameRef.current) {
-      cancelAnimationFrame(animFrameRef.current);
-    }
-    if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
-      audioContextRef.current.close().catch(() => {});
-    }
+    cancelSpeech();
+    stopListening();
 
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach(track => {
-        try {
-          track.stop();
-        } catch (e) {}
+        try { track.stop(); } catch (e) {}
       });
       localStreamRef.current = null;
-    }
-
-    if (localVideoRef.current) {
-      localVideoRef.current.srcObject = null;
-    }
-    if (remoteVideoRef.current) {
-      remoteVideoRef.current.srcObject = null;
     }
 
     if (pcRef.current) {
@@ -447,7 +300,11 @@ export function VideoConsultationModal({
       pcRef.current = null;
     }
 
-    // Inform room WebSocket
+    if (audioContextRef.current) {
+      try { audioContextRef.current.close(); } catch (e) {}
+      audioContextRef.current = null;
+    }
+
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       try {
         wsRef.current.send(JSON.stringify({
@@ -461,10 +318,8 @@ export function VideoConsultationModal({
       wsRef.current = null;
     }
 
-    // Call REST API to update active calls registry on backend
     api.endCall(consultationId, isDoctorUser ? 'doctor' : 'patient').catch(() => {});
 
-    // Broadcast CALL_ENDED to all tabs and global signaling channel
     if (broadcastChannelRef.current) {
       try {
         broadcastChannelRef.current.postMessage({
@@ -474,21 +329,6 @@ export function VideoConsultationModal({
         });
       } catch (e) {}
     }
-    try {
-      const globalCh = new BroadcastChannel('sehatsanketh_telehealth_global_signaling');
-      globalCh.postMessage({
-        type: 'CALL_ENDED',
-        senderSessionId: mySessionIdRef.current,
-        by: isDoctorUser ? 'doctor' : 'patient'
-      });
-      setTimeout(() => {
-        try { globalCh.close(); } catch(e) {}
-      }, 1000);
-    } catch (e) {}
-
-    try {
-      localStorage.removeItem('sehat_active_call');
-    } catch (e) {}
 
     setHasRemotePeerStream(false);
     setIsPeerConnected(false);
@@ -524,7 +364,21 @@ export function VideoConsultationModal({
     }
   }, [isDoctorUser, consultationId]);
 
-  // Deterministic WebRTC RTCPeerConnection initialization
+  // Synchronize language changes in real time across peers
+  const handleLanguageChange = useCallback((targetRole, newLang) => {
+    if (targetRole === 'doctor') {
+      setDoctorLanguage(newLang);
+    } else {
+      setPatientLanguage(newLang);
+    }
+    sendSignal({
+      type: 'LANGUAGE_UPDATE',
+      doctorLanguage: targetRole === 'doctor' ? newLang : doctorLanguage,
+      patientLanguage: targetRole === 'patient' ? newLang : patientLanguage
+    });
+  }, [doctorLanguage, patientLanguage, sendSignal]);
+
+  // WebRTC RTCPeerConnection initialization
   const initPeerConnection = useCallback(() => {
     if (pcRef.current && pcRef.current.signalingState !== 'closed') {
       return pcRef.current;
@@ -534,15 +388,12 @@ export function VideoConsultationModal({
       iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
         { urls: 'stun:stun1.l.google.com:19302' },
-        { urls: 'stun:stun2.l.google.com:19302' },
-        { urls: 'stun:stun3.l.google.com:19302' },
-        { urls: 'stun:stun4.l.google.com:19302' }
+        { urls: 'stun:stun2.l.google.com:19302' }
       ]
     });
     pcRef.current = pc;
     pendingIceCandidatesRef.current = [];
 
-    // Attach any local tracks that are already available
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach(track => {
         try {
@@ -552,17 +403,39 @@ export function VideoConsultationModal({
     }
 
     pc.ontrack = (event) => {
-      console.log("[WebRTC] ontrack received remote media:", event.track.kind, event.streams);
-      const stream = (event.streams && event.streams[0]) ? event.streams[0] : new MediaStream([event.track]);
-      remoteStreamRef.current = stream;
+      let stream = remoteStreamRef.current;
+      if (!stream) {
+        stream = new MediaStream();
+        remoteStreamRef.current = stream;
+      }
+
+      if (event.streams && event.streams[0]) {
+        event.streams[0].getTracks().forEach(track => {
+          if (!stream.getTracks().some(t => t.id === track.id)) {
+            stream.addTrack(track);
+          }
+        });
+      } else if (event.track) {
+        if (!stream.getTracks().some(t => t.id === event.track.id)) {
+          stream.addTrack(event.track);
+        }
+      }
+
       setHasRemotePeerStream(true);
       setIsPeerConnected(true);
 
+      if (remoteAudioRef.current) {
+        if (remoteAudioRef.current.srcObject !== stream) {
+          remoteAudioRef.current.srcObject = stream;
+        }
+        remoteAudioRef.current.play().catch(() => {});
+      }
+
       if (remoteVideoRef.current) {
-        remoteVideoRef.current.srcObject = stream;
-        remoteVideoRef.current.play().catch(err => {
-          console.warn("[WebRTC] Autoplay handled:", err);
-        });
+        if (remoteVideoRef.current.srcObject !== stream) {
+          remoteVideoRef.current.srcObject = stream;
+        }
+        remoteVideoRef.current.play().catch(() => {});
       }
     };
 
@@ -576,7 +449,6 @@ export function VideoConsultationModal({
     };
 
     pc.onconnectionstatechange = () => {
-      console.log("[WebRTC] Connection state:", pc.connectionState);
       if (pc.connectionState === 'connected') {
         setIsPeerConnected(true);
         setHasRemotePeerStream(true);
@@ -585,21 +457,11 @@ export function VideoConsultationModal({
       }
     };
 
-    pc.oniceconnectionstatechange = () => {
-      console.log("[WebRTC] ICE connection state:", pc.iceConnectionState);
-      if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
-        setIsPeerConnected(true);
-        setHasRemotePeerStream(true);
-      }
-    };
-
     return pc;
   }, [sendSignal]);
 
-  // Drain any ICE candidates received before setRemoteDescription was ready
   const drainPendingIceCandidates = useCallback((pc) => {
     if (pendingIceCandidatesRef.current && pendingIceCandidatesRef.current.length > 0) {
-      console.log(`[WebRTC] Draining ${pendingIceCandidatesRef.current.length} queued ICE candidates...`);
       for (const cand of pendingIceCandidatesRef.current) {
         try {
           pc.addIceCandidate(new RTCIceCandidate(cand));
@@ -609,7 +471,6 @@ export function VideoConsultationModal({
     }
   }, []);
 
-  // Helper to add or replace tracks in RTCPeerConnection
   const attachTracksToPeer = useCallback((stream) => {
     if (!stream) return;
     const pc = pcRef.current || initPeerConnection();
@@ -621,14 +482,11 @@ export function VideoConsultationModal({
       } else {
         try {
           pc.addTrack(track, stream);
-        } catch (err) {
-          console.warn("[WebRTC] addTrack error:", err);
-        }
+        } catch (err) {}
       }
     });
   }, [initPeerConnection]);
 
-  // Doctor initiates offer
   const makeOffer = useCallback(async () => {
     if (!isDoctorUser) return;
     const pc = pcRef.current || initPeerConnection();
@@ -637,7 +495,6 @@ export function VideoConsultationModal({
     try {
       isNegotiatingRef.current = true;
       if (pc.signalingState !== 'stable') {
-        console.log("[WebRTC] makeOffer waiting for stable state, current:", pc.signalingState);
         isNegotiatingRef.current = false;
         return;
       }
@@ -646,7 +503,6 @@ export function VideoConsultationModal({
         offerToReceiveVideo: true
       });
       await pc.setLocalDescription(offer);
-      console.log("[WebRTC] Doctor created offer, broadcasting...");
       sendSignal({
         type: 'WEBRTC_OFFER',
         sdp: offer
@@ -658,10 +514,8 @@ export function VideoConsultationModal({
     }
   }, [isDoctorUser, initPeerConnection, sendSignal]);
 
-  // Patient handles offer and creates answer
   const handleOffer = useCallback(async (offerSdp) => {
     if (isDoctorUser) return;
-    console.log("[WebRTC] Patient handling WEBRTC_OFFER...");
     const pc = pcRef.current || initPeerConnection();
     try {
       if (pc.signalingState !== 'stable') {
@@ -674,7 +528,6 @@ export function VideoConsultationModal({
 
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
-      console.log("[WebRTC] Patient created answer, broadcasting...");
       sendSignal({
         type: 'WEBRTC_ANSWER',
         sdp: answer
@@ -684,24 +537,20 @@ export function VideoConsultationModal({
     }
   }, [isDoctorUser, initPeerConnection, sendSignal, drainPendingIceCandidates]);
 
-  // Doctor handles answer
   const handleAnswer = useCallback(async (answerSdp) => {
     if (!isDoctorUser) return;
-    console.log("[WebRTC] Doctor handling WEBRTC_ANSWER...");
     const pc = pcRef.current;
     if (!pc) return;
     try {
       if (pc.signalingState === 'have-local-offer') {
         await pc.setRemoteDescription(new RTCSessionDescription(answerSdp));
         drainPendingIceCandidates(pc);
-        console.log("[WebRTC] Handshake completed successfully on Doctor side!");
       }
     } catch (err) {
       console.error("[WebRTC] Error handling answer:", err);
     }
   }, [isDoctorUser, drainPendingIceCandidates]);
 
-  // Handle incoming ICE candidate
   const handleIceCandidate = useCallback(async (candidate) => {
     const pc = pcRef.current;
     if (!pc || !pc.remoteDescription || !pc.remoteDescription.type) {
@@ -710,19 +559,16 @@ export function VideoConsultationModal({
     }
     try {
       await pc.addIceCandidate(new RTCIceCandidate(candidate));
-    } catch (err) {
-      console.warn("[WebRTC] Error adding ICE candidate:", err);
-    }
+    } catch (err) {}
   }, []);
 
-  // Real-Time Cross-Tab / Cross-Window Synchronization via WebSocket, BroadcastChannel & WebRTC
+  // Real-Time Cross-Tab / Cross-Window Synchronization
   useEffect(() => {
     if (!isOpen) return;
 
     let ws = null;
     let channel = null;
 
-    // Deterministically initialize peer connection immediately on room open
     initPeerConnection();
 
     const handleIncomingSignal = async (data) => {
@@ -730,39 +576,45 @@ export function VideoConsultationModal({
       if (data.senderSessionId === mySessionIdRef.current) return;
       if (data.senderRole === (isDoctorUser ? 'doctor' : 'patient')) return;
 
-      if (data.type === 'PEER_JOINED') {
-        console.log("[WebRTC] Received PEER_JOINED from", data.senderRole);
-        if (isDoctorUser) {
-          makeOffer();
-        } else {
-          sendSignal({ type: 'PEER_READY' });
-        }
+      if (data.type === 'PEER_JOINED' || data.type === 'CALL_ACCEPTED') {
+        setIsPeerConnected(true);
+        if (isDoctorUser) makeOffer();
+        else sendSignal({ type: 'PEER_READY' });
       } else if (data.type === 'PEER_READY') {
-        console.log("[WebRTC] Received PEER_READY from", data.senderRole);
-        if (isDoctorUser) {
-          makeOffer();
-        }
+        setIsPeerConnected(true);
+        if (isDoctorUser) makeOffer();
       } else if (data.type === 'WEBRTC_OFFER') {
-        if (!isDoctorUser && data.sdp) {
-          handleOffer(data.sdp);
-        }
+        setIsPeerConnected(true);
+        if (!isDoctorUser && data.sdp) handleOffer(data.sdp);
       } else if (data.type === 'WEBRTC_ANSWER') {
-        if (isDoctorUser && data.sdp) {
-          handleAnswer(data.sdp);
-        }
+        setIsPeerConnected(true);
+        if (isDoctorUser && data.sdp) handleAnswer(data.sdp);
       } else if (data.type === 'WEBRTC_ICE_CANDIDATE') {
-        if (data.candidate) {
-          handleIceCandidate(data.candidate);
-        }
-      } else if (data.type === 'CALL_ENDED') {
-        console.log("Remote peer ended call. Closing consultation room...");
+        if (data.candidate) handleIceCandidate(data.candidate);
+      } else if (data.type === 'CALL_ENDED' || data.type === 'CALL_DECLINED') {
         handleEndCall();
+      } else if (data.type === 'LANGUAGE_UPDATE') {
+        if (data.doctorLanguage) setDoctorLanguage(data.doctorLanguage);
+        if (data.patientLanguage) setPatientLanguage(data.patientLanguage);
+      } else if (data.type === 'SPEECH_ACTIVITY') {
+        const isPeerDoc = data.role ? data.role === 'doctor' : (data.senderRole === 'doctor');
+        if (isPeerDoc) setIsDoctorSpeaking(!!data.isSpeaking);
+        else setIsPatientSpeaking(!!data.isSpeaking);
+
+        if (data.interimText && data.interimText.trim()) {
+          setRemoteLiveSpeech({
+            role: data.role || data.senderRole,
+            text: data.interimText.trim()
+          });
+        } else if (!data.isSpeaking) {
+          setRemoteLiveSpeech(null);
+        }
       } else if (data.type === 'NEW_SPEECH_TURN') {
+        setRemoteLiveSpeech(null);
         const msg = data.message;
         if (!msg) return;
         const origText = (msg.original || '').trim();
         const transText = (msg.translated || '').trim();
-        // Discard any empty or symbol-only utterances completely
         if (!origText && !transText) return;
 
         setTranscript(prev => {
@@ -770,38 +622,41 @@ export function VideoConsultationModal({
           return [...prev, msg];
         });
 
-        if (data.caption && ((data.caption.original || '').trim() || (data.caption.translated || '').trim())) {
+        if (data.caption) {
           setCurrentCaption(data.caption);
         }
 
         if (msg.role === 'doctor') {
           setIsDoctorSpeaking(true);
-          setTimeout(() => setIsDoctorSpeaking(false), 4000);
         } else {
           setIsPatientSpeaking(true);
-          setTimeout(() => setIsPatientSpeaking(false), 4000);
         }
 
-        // Automatic translation speech playback for listener
+        // Automatic audio playback in listener's native language
         const isSender = data.message.role === (isDoctorUser ? 'doctor' : 'patient');
         if (!isSender && isTtsActive && data.audioToPlay) {
-          setAudioPlayingTarget(data.caption.targetPerson);
+          setAudioPlayingTarget(data.caption?.targetPerson || 'Listener');
           speakText(data.audioToPlay.text, data.audioToPlay.lang, data.audioToPlay.b64)
-            .finally(() => setAudioPlayingTarget(null));
+            .finally(() => {
+              setAudioPlayingTarget(null);
+              setIsDoctorSpeaking(false);
+              setIsPatientSpeaking(false);
+            });
+        } else {
+          setTimeout(() => {
+            setIsDoctorSpeaking(false);
+            setIsPatientSpeaking(false);
+          }, 3500);
         }
       }
     };
 
-    // 1. BroadcastChannel for local instant cross-tab sync
     try {
       channel = new BroadcastChannel(`sehatsanketh_call_${consultationId}`);
       broadcastChannelRef.current = channel;
       channel.onmessage = (event) => handleIncomingSignal(event.data);
-    } catch (e) {
-      console.warn("BroadcastChannel not supported:", e);
-    }
+    } catch (e) {}
 
-    // 2. Room WebSocket for server-backed cross-window/cross-network signaling
     try {
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       const wsUrl = `${protocol}//${window.location.host}/consultation/${consultationId}/stream`;
@@ -818,21 +673,14 @@ export function VideoConsultationModal({
       ws.onopen = () => {
         sendSignal({ type: 'PEER_JOINED' });
       };
-    } catch (wsErr) {
-      console.warn("Room WebSocket error:", wsErr);
-    }
+    } catch (wsErr) {}
 
-    // Announce arrival via broadcast channel as well
     sendSignal({ type: 'PEER_JOINED' });
 
-    // 3. Heartbeat & Self-Healing Auto-Reconciliation Timer (runs until connected)
     const heartbeatTimer = setInterval(() => {
       if (!isPeerConnected && !hasRemotePeerStream) {
-        if (isDoctorUser) {
-          makeOffer();
-        } else {
-          sendSignal({ type: 'PEER_READY' });
-        }
+        if (isDoctorUser) makeOffer();
+        else sendSignal({ type: 'PEER_READY' });
       }
     }, 2500);
 
@@ -864,7 +712,6 @@ export function VideoConsultationModal({
     return `${m}:${s}`;
   };
 
-  // Helper to generate a silent audio track when hardware microphone is completely unavailable
   const createSilentAudioTrack = () => {
     try {
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
@@ -882,7 +729,7 @@ export function VideoConsultationModal({
     return null;
   };
 
-  // Robust Camera & Microphone Access with multi-tier fallbacks
+  // Camera & Mic Access
   const requestCameraAccess = useCallback(async () => {
     let stream = null;
     let acquiredHardware = false;
@@ -903,40 +750,21 @@ export function VideoConsultationModal({
             try {
               stream = await navigator.mediaDevices.getUserMedia({ video: true });
               acquiredHardware = true;
-            } catch (err3) {
-              console.warn("Hardware camera locked by another application or tab:", err3);
-            }
+            } catch (err3) {}
           }
         }
       }
     } catch (e) {}
 
-    // Fallback if hardware camera is locked (e.g. 2 tabs on same laptop)
     if (!acquiredHardware || !stream) {
-      console.log("Hardware camera unavailable/locked. Creating live canvas stream for avatar feed...");
-      // Try to acquire real microphone at least
       let micStream = null;
       try {
         micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      } catch (e) {}
-
-      // Capture stream from the visible avatar canvas
-      const targetCanvas = isDoctorUser ? doctorCanvasRef.current : patientCanvasRef.current;
-      if (targetCanvas && targetCanvas.captureStream) {
-        try {
-          stream = targetCanvas.captureStream(30);
-          console.log("Successfully created 30-FPS canvas stream for avatar feed");
-        } catch (e) {
-          console.warn("captureStream error:", e);
-        }
-      }
-
-      if (stream) {
-        if (micStream && micStream.getAudioTracks().length > 0) {
-          stream.addTrack(micStream.getAudioTracks()[0]);
-        } else {
-          const silentAudio = createSilentAudioTrack();
-          if (silentAudio) stream.addTrack(silentAudio);
+        stream = micStream;
+      } catch (e) {
+        const silentAudio = createSilentAudioTrack();
+        if (silentAudio) {
+          stream = new MediaStream([silentAudio]);
         }
       }
     }
@@ -952,11 +780,13 @@ export function VideoConsultationModal({
         localVideoRef.current.srcObject = stream;
         localVideoRef.current.play().catch(() => {});
       }
+      if (remoteVideoRef.current && acquiredHardware && !remoteStreamRef.current) {
+        remoteVideoRef.current.srcObject = stream;
+        remoteVideoRef.current.play().catch(() => {});
+      }
 
-      // Attach tracks to RTCPeerConnection
       attachTracksToPeer(stream);
 
-      // Audio analyzer for equalizer
       try {
         const audioTracks = stream.getAudioTracks();
         if (audioTracks.length > 0) {
@@ -984,7 +814,7 @@ export function VideoConsultationModal({
               setLocalAudioLevel(normalized);
 
               const isSpeaking = normalized > 18;
-              if (isDoctorUser) {
+              if (activeSpeakerRole === 'doctor') {
                 setIsDoctorSpeaking(isSpeaking);
               } else {
                 setIsPatientSpeaking(isSpeaking);
@@ -998,35 +828,28 @@ export function VideoConsultationModal({
         }
       } catch (e) {}
 
-      // If we are doctor, initiate offer now that tracks are attached
       if (isDoctorUser) {
         setTimeout(() => makeOffer(), 300);
       } else {
-        // Patient announces ready to receive offer
         sendSignal({ type: 'PEER_READY' });
       }
     }
-  }, [isDoctorUser, attachTracksToPeer, makeOffer, sendSignal]);
+  }, [isDoctorUser, activeSpeakerRole, attachTracksToPeer, makeOffer, sendSignal]);
 
-  // Request camera access on modal open
   useEffect(() => {
     if (!isOpen) return;
     requestCameraAccess();
   }, [isOpen, requestCameraAccess]);
 
-  // Support pressing Escape key to immediately end call and close
   useEffect(() => {
     if (!isOpen) return;
     const handleKeyDown = (e) => {
-      if (e.key === 'Escape') {
-        handleEndCall();
-      }
+      if (e.key === 'Escape') handleEndCall();
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isOpen, handleEndCall]);
 
-  // Toggle Mic Audio Track
   const handleToggleMic = () => {
     const newState = !isMicOn;
     setIsMicOn(newState);
@@ -1035,9 +858,13 @@ export function VideoConsultationModal({
         track.enabled = newState;
       });
     }
+    if (!newState) {
+      stopContinuousSpeech();
+    } else {
+      setTimeout(() => startContinuousSpeech(), 250);
+    }
   };
 
-  // Toggle Camera Video Track
   const handleToggleVideo = () => {
     const newState = !isVideoOn;
     setIsVideoOn(newState);
@@ -1048,19 +875,31 @@ export function VideoConsultationModal({
     }
   };
 
-  // Handle a completed utterance / turn in the conversation
-  const handleCompleteTurn = async (customText = null) => {
+  // ═════════════════════════════════════════════════════════════════════════
+  // CORE ENGINE: TURN-BASED BILINGUAL TRANSLATION, SUBTITLES & AUDIO OUTPUT
+  // ═════════════════════════════════════════════════════════════════════════
+  const handleCompleteTurn = useCallback(async (customText = null, customRole = null) => {
     const textToSend = (customText !== null && customText !== undefined ? customText : inputText).trim();
     if (!textToSend || isTranslating) return;
 
     setInputText('');
+    setLocalLiveSpeech('');
     setIsTranslating(true);
 
-    const isDocTurn = activeSpeakerRole === 'doctor';
-    const sourceLang = isDocTurn ? doctorLanguage : patientLanguage;
-    const targetLang = isDocTurn ? patientLanguage : doctorLanguage;
+    const speakingRole = customRole || activeSpeakerRole;
+    const isDocTurn = speakingRole === 'doctor';
+    
+    // Directional Language Mapping
+    // When Doctor speaks: Source = Doctor Lang (e.g. en), Target = Patient Lang (e.g. kn, ta, te, hi)
+    // When Patient speaks: Source = Patient Lang (e.g. kn, ta, te, hi), Target = Doctor Lang (e.g. en)
+    let sourceLang = isDocTurn ? doctorLanguage : patientLanguage;
+    let targetLang = isDocTurn ? patientLanguage : doctorLanguage;
     const senderName = isDocTurn ? effectiveDoctorName : effectivePatientName;
     const targetPerson = isDocTurn ? effectivePatientName : effectiveDoctorName;
+
+    if (sourceLang === targetLang) {
+      targetLang = sourceLang === 'en' ? (patientLanguage !== 'en' ? patientLanguage : 'hi') : 'en';
+    }
 
     if (isDocTurn) {
       setIsDoctorSpeaking(true);
@@ -1070,7 +909,7 @@ export function VideoConsultationModal({
 
     try {
       const res = await api.postConsultationMessage(consultationId, {
-        sender_role: activeSpeakerRole,
+        sender_role: speakingRole,
         text: textToSend,
         source_language: sourceLang,
         target_language: targetLang
@@ -1087,7 +926,7 @@ export function VideoConsultationModal({
       const newMsg = {
         id: Date.now(),
         speaker: senderName,
-        role: activeSpeakerRole,
+        role: speakingRole,
         sourceLang,
         targetLang,
         original: entry.original_text,
@@ -1098,9 +937,10 @@ export function VideoConsultationModal({
 
       setTranscript(prev => [...prev, newMsg]);
 
+      // Subtitle generated in the opposite person's language
       const newCaption = {
         speakerName: senderName,
-        speakerRole: activeSpeakerRole,
+        speakerRole: speakingRole,
         sourceLang,
         targetLang,
         targetPerson,
@@ -1132,14 +972,13 @@ export function VideoConsultationModal({
         } catch (e) {}
       }
 
-      // If standalone (testing without a connected peer), play audio so the user can verify speech output
-      const isAlone = !isPeerConnected && !hasRemotePeerStream;
-      if (isTtsActive && isAlone) {
+      // Automatic Audio Speech Synthesis Playback in Target Language
+      if (isTtsActive) {
         setAudioPlayingTarget(targetPerson);
         try {
           await speakText(newMsg.translated, targetLang, newMsg.audioBase64);
         } catch (audioErr) {
-          console.warn("Audio playback error:", audioErr);
+          console.warn("Audio playback note:", audioErr);
         } finally {
           setAudioPlayingTarget(null);
           setIsDoctorSpeaking(false);
@@ -1157,7 +996,7 @@ export function VideoConsultationModal({
       const fallbackEntry = {
         id: Date.now(),
         speaker: senderName,
-        role: activeSpeakerRole,
+        role: speakingRole,
         sourceLang,
         targetLang,
         original: textToSend,
@@ -1168,7 +1007,7 @@ export function VideoConsultationModal({
       setTranscript(prev => [...prev, fallbackEntry]);
       setCurrentCaption({
         speakerName: senderName,
-        speakerRole: activeSpeakerRole,
+        speakerRole: speakingRole,
         sourceLang,
         targetLang,
         targetPerson,
@@ -1181,9 +1020,9 @@ export function VideoConsultationModal({
     } finally {
       setIsTranslating(false);
     }
-  };
+  }, [inputText, isTranslating, activeSpeakerRole, doctorLanguage, patientLanguage, effectiveDoctorName, effectivePatientName, consultationId, isTtsActive]);
 
-  // Replay speech audio of any message
+  // Replay speech audio of any translated message
   const handleReplayAudio = async (text, lang, audioB64 = null, targetPerson = "Participant") => {
     setAudioPlayingTarget(targetPerson);
     try {
@@ -1195,7 +1034,84 @@ export function VideoConsultationModal({
     }
   };
 
-  // Live Speech Recognition on Real Microphone
+  // Continuous Speech Recognition with Silence/Pause Detection
+  const startContinuousSpeech = useCallback(() => {
+    if (!isSpeechRecognitionSupported() || !isMicOn) return;
+    if (speechRecognitionActiveRef.current) return;
+
+    speechRecognitionActiveRef.current = true;
+    setIsListeningSpeech(true);
+
+    const activeLang = activeSpeakerRole === 'doctor' ? doctorLanguage : patientLanguage;
+
+    startListening({
+      lang: activeLang,
+      continuous: true,
+      autoRestart: true,
+      silenceThresholdMs: 1200,
+      onResult: (transcriptText, isFinal) => {
+        const cleanText = (typeof transcriptText === 'string' ? transcriptText : '').trim();
+        if (isFinal) {
+          setLocalLiveSpeech('');
+          sendSignal({
+            type: 'SPEECH_ACTIVITY',
+            isSpeaking: false,
+            interimText: ''
+          });
+          if (cleanText) {
+            handleCompleteTurn(cleanText);
+          }
+        } else {
+          setLocalLiveSpeech(cleanText);
+          if (cleanText) {
+            sendSignal({
+              type: 'SPEECH_ACTIVITY',
+              isSpeaking: true,
+              interimText: cleanText
+            });
+            if (activeSpeakerRole === 'doctor') {
+              setIsDoctorSpeaking(true);
+            } else {
+              setIsPatientSpeaking(true);
+            }
+          }
+        }
+      },
+      onError: (err) => {
+        console.warn("[Speech] Recognition note:", err);
+      },
+      onEnd: () => {
+        setLocalLiveSpeech('');
+      }
+    });
+  }, [isMicOn, activeSpeakerRole, doctorLanguage, patientLanguage, sendSignal, handleCompleteTurn]);
+
+  const stopContinuousSpeech = useCallback(() => {
+    speechRecognitionActiveRef.current = false;
+    setIsListeningSpeech(false);
+    setLocalLiveSpeech('');
+    stopListening();
+    sendSignal({
+      type: 'SPEECH_ACTIVITY',
+      isSpeaking: false,
+      interimText: ''
+    });
+  }, [sendSignal]);
+
+  useEffect(() => {
+    if (isOpen && isMicOn) {
+      const t = setTimeout(() => {
+        startContinuousSpeech();
+      }, 700);
+      return () => {
+        clearTimeout(t);
+        stopContinuousSpeech();
+      };
+    } else {
+      stopContinuousSpeech();
+    }
+  }, [isOpen, isMicOn, startContinuousSpeech, stopContinuousSpeech]);
+
   const handleToggleMicSpeech = () => {
     if (!isSpeechRecognitionSupported()) {
       alert("Speech recognition is not supported in this browser. Please use text input or quick dialogue presets.");
@@ -1203,27 +1119,9 @@ export function VideoConsultationModal({
     }
 
     if (isListeningSpeech) {
-      stopListening();
-      setIsListeningSpeech(false);
+      stopContinuousSpeech();
     } else {
-      setIsListeningSpeech(true);
-      const activeLang = activeSpeakerRole === 'doctor' ? doctorLanguage : patientLanguage;
-      startListening({
-        lang: activeLang,
-        onResult: (transcriptText, isFinal) => {
-          const cleanText = (typeof transcriptText === 'string' ? transcriptText : '').trim();
-          if (isFinal) {
-            setIsListeningSpeech(false);
-            if (cleanText) {
-              handleCompleteTurn(cleanText);
-            }
-          } else {
-            setInputText(transcriptText);
-          }
-        },
-        onError: () => setIsListeningSpeech(false),
-        onEnd: () => setIsListeningSpeech(false)
-      });
+      startContinuousSpeech();
     }
   };
 
@@ -1235,9 +1133,11 @@ export function VideoConsultationModal({
   if (!isOpen) return null;
 
   return (
-    <div 
-      className="fixed inset-0 z-50 flex flex-col bg-slate-950 text-white font-sans overflow-hidden select-none"
-    >
+    <div className="fixed inset-0 z-50 flex flex-col bg-slate-950 text-white font-sans overflow-hidden select-none">
+      
+      {/* Real WebRTC Remote Audio Player */}
+      <audio ref={remoteAudioRef} autoPlay playsInline className="hidden" />
+
       {/* TOP HEADER */}
       <header className="h-14 sm:h-16 px-3 sm:px-6 bg-slate-900/95 border-b border-slate-800 flex items-center justify-between gap-2 flex-shrink-0 z-20">
         
@@ -1261,36 +1161,76 @@ export function VideoConsultationModal({
               )}
             </h1>
             <p className="text-[10px] text-slate-400 hidden md:block">
-              Encrypted Real-Time Telehealth • Instant Voice Subtitles
+              Real-Time Bilingual Video Call • Instant Voice & Subtitles
             </p>
           </div>
         </div>
 
-        {/* Center: Language Barrier Tag */}
-        <div className="hidden lg:flex items-center gap-2 px-3 py-1 rounded-full bg-slate-800/80 border border-slate-700 text-xs font-bold">
-          <Languages className="w-3.5 h-3.5 text-brand-mint" />
-          <span className="text-blue-300">Dr: {getLangName(doctorLanguage)}</span>
-          <span className="text-slate-400">⇄</span>
-          <span className="text-emerald-300">Patient: {getLangName(patientLanguage)}</span>
+        {/* Center: Language Barrier Selectors */}
+        <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-800/90 border border-slate-700 text-xs font-bold shadow-xs">
+          <Languages className="w-3.5 h-3.5 text-cyan-400" />
+          <div className="flex items-center gap-1.5">
+            <span className="text-blue-300 text-[11px]">Dr:</span>
+            <select
+              value={doctorLanguage}
+              onChange={(e) => handleLanguageChange('doctor', e.target.value)}
+              className="bg-slate-900 text-blue-200 text-xs font-semibold rounded-lg px-2 py-0.5 border border-slate-700 focus:outline-none focus:border-blue-500 cursor-pointer"
+              title="Doctor's spoken language"
+            >
+              <option value="en">English</option>
+              <option value="hi">हिंदी (Hindi)</option>
+              <option value="kn">ಕನ್ನಡ (Kannada)</option>
+              <option value="ta">தமிழ் (Tamil)</option>
+              <option value="te">తెలుగు (Telugu)</option>
+            </select>
+          </div>
+          <span className="text-slate-400 text-xs">⇄</span>
+          <div className="flex items-center gap-1.5">
+            <span className="text-emerald-300 text-[11px]">Patient:</span>
+            <select
+              value={patientLanguage}
+              onChange={(e) => handleLanguageChange('patient', e.target.value)}
+              className="bg-slate-900 text-emerald-200 text-xs font-semibold rounded-lg px-2 py-0.5 border border-slate-700 focus:outline-none focus:border-emerald-500 cursor-pointer"
+              title="Patient's spoken language"
+            >
+              <option value="kn">ಕನ್ನಡ (Kannada)</option>
+              <option value="ta">தமிழ் (Tamil)</option>
+              <option value="te">తెలుగు (Telugu)</option>
+              <option value="hi">हिंदी (Hindi)</option>
+              <option value="en">English</option>
+            </select>
+          </div>
         </div>
 
-        {/* Right Controls: Single User Identity (No Switcher) & End Call */}
+        {/* Right Controls */}
         <div className="flex items-center gap-2 flex-shrink-0">
           
-          {/* User Profile Badge: Doctor sees Doctor profile, Patient sees Patient profile */}
+          {/* User Profile Badge */}
           <div className="flex items-center">
             {isDoctorUser ? (
               <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-blue-950/80 border border-blue-700 text-blue-300 text-xs font-black shadow-xs">
                 <span className="w-2 h-2 rounded-full bg-blue-400" />
-                <span>👨‍⚕️ {effectiveDoctorName} (Doctor)</span>
+                <span>👨‍⚕️ {effectiveDoctorName}</span>
               </div>
             ) : (
               <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-950/80 border border-emerald-700 text-emerald-300 text-xs font-black shadow-xs">
                 <span className="w-2 h-2 rounded-full bg-emerald-400" />
-                <span>👤 {effectivePatientName} (Patient)</span>
+                <span>👤 {effectivePatientName}</span>
               </div>
             )}
           </div>
+
+          {/* Doctor Quick Action: Prescribe & Order Labs */}
+          {isDoctorUser && (
+            <button
+              onClick={handleOpenInCallRx}
+              className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 active:scale-95 text-white font-black text-xs shadow-md shadow-emerald-600/20 transition cursor-pointer"
+              title="Issue Prescription & Recommend Diagnostic Labs"
+            >
+              <FlaskConical className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Prescribe & Labs</span>
+            </button>
+          )}
 
           {/* End Call Button */}
           <button
@@ -1304,277 +1244,349 @@ export function VideoConsultationModal({
         </div>
       </header>
 
-      {/* MAIN CALL AREA: Video Stage + Collapsible Live Drawer */}
+      {/* MAIN CALL AREA: Video Stage + Collapsible Transcript Drawer */}
       <div className="flex-1 min-h-0 flex flex-col lg:flex-row relative overflow-hidden bg-black/90">
         
-        {/* VIDEO STAGE: Takes 100% available space */}
+        {/* VIDEO STAGE */}
         <div className="flex-1 min-h-0 flex flex-col relative overflow-hidden p-2 sm:p-4">
           
-          {/* Video Grid: 1 Tile for DOCTOR, 1 Tile for PATIENT */}
           <div className="flex-1 min-h-0 relative flex items-center justify-center">
             
-            {layoutMode === 'grid' ? (
-              /* GRID VIEW: Side-by-Side (Doctor on Left, Patient on Right) */
-              <div className="w-full h-full grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-4 max-h-full">
-                
-                {/* 1. DOCTOR VIDEO TILE (Doctor's Face is ALWAYS visible) */}
-                <div className={`relative w-full h-full rounded-2xl sm:rounded-3xl overflow-hidden bg-slate-900 border-2 transition-all flex items-center justify-center ${
-                  isDoctorSpeaking
-                    ? 'border-blue-500 shadow-xl shadow-blue-500/30 ring-4 ring-blue-500/30'
-                    : 'border-slate-800'
-                }`}>
-                  {isDoctorUser ? (
+            {/* STAGE CONTAINER: FaceTime PiP or Split Grid */}
+            <div className={`w-full h-full ${layoutMode === 'grid' ? 'grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-4 max-h-full' : 'relative rounded-2xl sm:rounded-3xl overflow-hidden bg-slate-950 border border-slate-800'}`}>
+              
+              {/* Floating Layout Toggle */}
+              <div className="absolute top-3 right-3 sm:top-4 sm:right-4 z-30 flex items-center gap-2">
+                <button
+                  onClick={() => setLayoutMode(layoutMode === 'pip' ? 'grid' : 'pip')}
+                  className="px-3 py-1.5 rounded-xl bg-slate-900/85 hover:bg-slate-800/95 backdrop-blur-md border border-slate-700/80 text-white text-xs font-bold flex items-center gap-1.5 shadow-xl transition active:scale-95 cursor-pointer"
+                >
+                  {layoutMode === 'pip' ? (
                     <>
-                      {/* Doctor Local Webcam Video */}
-                      <video
-                        ref={localVideoRef}
-                        autoPlay
-                        playsInline
-                        muted
-                        className={`w-full h-full object-cover scale-x-[-1] ${
-                          hasHardwareCamera && isVideoOn ? 'block' : 'hidden'
-                        }`}
-                      />
-                      {/* Doctor Canvas Avatar (active when camera off or hardware camera locked) */}
-                      <canvas
-                        ref={doctorCanvasRef}
-                        width={640}
-                        height={360}
-                        className={`w-full h-full object-cover ${
-                          hasHardwareCamera && isVideoOn ? 'hidden' : 'block'
-                        }`}
-                      />
+                      <Grid className="w-3.5 h-3.5 text-emerald-400" />
+                      <span className="hidden sm:inline">Split Grid</span>
                     </>
                   ) : (
                     <>
-                      {/* Patient Screen: Remote Doctor Video from WebRTC */}
-                      <video
-                        ref={remoteVideoRef}
-                        autoPlay
-                        playsInline
-                        className={`w-full h-full object-cover ${
-                          hasRemotePeerStream ? 'block' : 'hidden'
-                        }`}
-                      />
-                      {/* Doctor Canvas Avatar (always rendered until WebRTC stream arrives) */}
-                      <canvas
-                        ref={doctorCanvasRef}
-                        width={640}
-                        height={360}
-                        className={`w-full h-full object-cover ${
-                          hasRemotePeerStream ? 'hidden' : 'block'
-                        }`}
-                      />
+                      <Layout className="w-3.5 h-3.5 text-blue-400" />
+                      <span className="hidden sm:inline">FaceTime PiP</span>
                     </>
                   )}
+                </button>
+              </div>
 
-                  {/* Doctor Info Tag */}
-                  <div className="absolute top-2.5 left-2.5 sm:top-3 sm:left-3 px-2.5 py-1 rounded-xl bg-slate-950/85 backdrop-blur-md border border-slate-700 text-[11px] font-bold flex items-center gap-1.5 z-20">
-                    <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
-                    <span className="text-blue-200">{effectiveDoctorName} (Doctor{isDoctorUser ? ' • You' : ''})</span>
-                    <span className="text-[10px] text-blue-300 font-extrabold uppercase">
-                      ({getLangName(doctorLanguage)})
-                    </span>
-                    {hasRemotePeerStream && !isDoctorUser && (
-                      <span className="ml-1 text-[9px] font-extrabold px-1.5 py-0.2 rounded bg-emerald-950 text-emerald-300 border border-emerald-800">
-                        LIVE P2P
-                      </span>
+              {/* 1. DOCTOR VIDEO TILE */}
+              {(() => {
+                const isDoctorMain = layoutMode === 'pip' && (isDoctorUser ? isSwapped : !isSwapped);
+                const isDoctorPip = layoutMode === 'pip' && !isDoctorMain;
+
+                const tileClass = layoutMode === 'grid'
+                  ? `relative w-full h-full rounded-2xl sm:rounded-3xl overflow-hidden bg-slate-900 border-2 transition-all flex items-center justify-center ${
+                      isDoctorUser ? 'order-2' : 'order-1'
+                    } ${
+                      isDoctorSpeaking ? 'border-blue-500 shadow-xl shadow-blue-500/30 ring-4 ring-blue-500/30' : 'border-slate-800'
+                    }`
+                  : isDoctorMain
+                  ? `absolute inset-0 w-full h-full z-0 overflow-hidden bg-slate-950 flex items-center justify-center border-0 ${
+                      isDoctorSpeaking ? 'ring-4 ring-blue-500/40 ring-inset' : ''
+                    }`
+                  : `absolute bottom-3 right-3 sm:bottom-4 sm:right-4 w-36 sm:w-56 md:w-64 aspect-[4/3] rounded-2xl sm:rounded-3xl shadow-2xl border-2 z-20 cursor-pointer overflow-hidden transition-all duration-200 hover:scale-105 active:scale-95 group flex items-center justify-center bg-slate-900 ${
+                      isDoctorSpeaking ? 'border-blue-400 ring-4 ring-blue-500/50' : 'border-white/30'
+                    }`;
+
+                return (
+                  <div 
+                    onClick={isDoctorPip ? () => setIsSwapped(!isSwapped) : undefined}
+                    className={tileClass}
+                  >
+                    {isDoctorUser ? (
+                      <>
+                        <video
+                          ref={localVideoRef}
+                          autoPlay
+                          playsInline
+                          muted
+                          className={`absolute inset-0 w-full h-full object-cover scale-x-[-1] z-10 ${
+                            hasHardwareCamera && isVideoOn ? 'block' : 'hidden'
+                          }`}
+                        />
+                        {(!hasHardwareCamera || !isVideoOn) && (
+                          <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-950 text-slate-400 gap-3 z-0 select-none">
+                            <div className="w-16 h-16 rounded-2xl bg-slate-900 border border-slate-800 flex items-center justify-center text-slate-500 shadow-inner">
+                              <VideoOff className="w-8 h-8 text-slate-500" />
+                            </div>
+                            <div className="text-center px-4">
+                              <p className="text-xs font-bold text-slate-300">Camera Feed Off</p>
+                              <p className="text-[10px] text-slate-500 mt-0.5">Turn on camera to show live video</p>
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      <>
+                        <video
+                          ref={remoteVideoRef}
+                          autoPlay
+                          playsInline
+                          className={`absolute inset-0 w-full h-full object-cover z-10 ${
+                            isVideoOn ? 'block' : 'hidden'
+                          }`}
+                        />
+                        {!isVideoOn && (
+                          <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-950 text-slate-400 gap-3 z-0 select-none">
+                            <div className="w-16 h-16 rounded-2xl bg-blue-950/40 border border-blue-900/50 flex items-center justify-center text-blue-400 shadow-inner animate-pulse">
+                              <VideoOff className="w-8 h-8 text-blue-400" />
+                            </div>
+                            <div className="text-center px-4">
+                              <p className="text-xs font-bold text-blue-200">Doctor's Live Camera</p>
+                              <p className="text-[10px] text-slate-500 mt-0.5">Camera is turned off</p>
+                            </div>
+                          </div>
+                        )}
+                      </>
                     )}
-                  </div>
 
-                  {/* Doctor Speaking Wave */}
-                  {isDoctorSpeaking && (
-                    <div className="absolute bottom-2.5 left-2.5 sm:bottom-3 sm:left-3 px-2.5 py-1 rounded-full bg-blue-600/90 text-white text-[10px] font-black flex items-center gap-1.5 shadow-md animate-pulse z-20">
-                      <Activity className="w-3.5 h-3.5 animate-spin" />
-                      <span>Speaking in English...</span>
+                    {isDoctorPip && (
+                      <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center z-30 pointer-events-none">
+                        <span className="text-[10px] sm:text-xs font-bold text-white bg-slate-900/90 px-2.5 py-1 rounded-full border border-white/20 flex items-center gap-1 shadow-lg">
+                          <RotateCcw className="w-3 h-3 text-cyan-400" /> Tap to swap
+                        </span>
+                      </div>
+                    )}
+
+                    <div className="absolute top-2.5 left-2.5 sm:top-3 sm:left-3 px-2.5 py-1 rounded-xl bg-slate-950/85 backdrop-blur-md border border-slate-700 text-[11px] font-bold flex items-center gap-1.5 z-20">
+                      <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
+                      <span className="text-blue-200">
+                        {isDoctorUser ? `You (${effectiveDoctorName})` : `${effectiveDoctorName} (Doctor)`}
+                      </span>
+                      <span className="text-[10px] text-blue-300 font-extrabold uppercase">
+                        ({getLangName(doctorLanguage)})
+                      </span>
                     </div>
-                  )}
-                </div>
 
-                {/* 2. PATIENT VIDEO TILE (Patient's Face is ALWAYS visible) */}
-                <div className={`relative w-full h-full rounded-2xl sm:rounded-3xl overflow-hidden bg-slate-900 border-2 transition-all flex items-center justify-center ${
-                  isPatientSpeaking
-                    ? 'border-emerald-500 shadow-xl shadow-emerald-500/30 ring-4 ring-emerald-500/30'
-                    : 'border-slate-800'
-                }`}>
-                  {!isDoctorUser ? (
-                    <>
-                      {/* Patient Local Webcam Video */}
-                      <video
-                        ref={localVideoRef}
-                        autoPlay
-                        playsInline
-                        muted
-                        className={`w-full h-full object-cover scale-x-[-1] ${
-                          hasHardwareCamera && isVideoOn ? 'block' : 'hidden'
-                        }`}
-                      />
-                      {/* Patient Canvas Avatar (active when camera off or hardware camera locked) */}
-                      <canvas
-                        ref={patientCanvasRef}
-                        width={640}
-                        height={360}
-                        className={`w-full h-full object-cover ${
-                          hasHardwareCamera && isVideoOn ? 'hidden' : 'block'
-                        }`}
-                      />
-                    </>
-                  ) : (
-                    <>
-                      {/* Doctor Screen: Remote Patient Video from WebRTC */}
-                      <video
-                        ref={remoteVideoRef}
-                        autoPlay
-                        playsInline
-                        className={`w-full h-full object-cover ${
-                          hasRemotePeerStream ? 'block' : 'hidden'
-                        }`}
-                      />
-                      {/* Patient Canvas Avatar (always rendered until WebRTC stream arrives) */}
-                      <canvas
-                        ref={patientCanvasRef}
-                        width={640}
-                        height={360}
-                        className={`w-full h-full object-cover ${
-                          hasRemotePeerStream ? 'hidden' : 'block'
-                        }`}
-                      />
-                    </>
-                  )}
-
-                  {/* Patient Info Tag with Live Mic Indicator */}
-                  <div className="absolute top-2.5 left-2.5 sm:top-3 sm:left-3 px-2.5 py-1 rounded-xl bg-slate-950/85 backdrop-blur-md border border-slate-700 text-[11px] font-bold flex items-center gap-1.5 z-20">
-                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                    <span className="text-emerald-200">{effectivePatientName} (Patient{!isDoctorUser ? ' • You' : ''})</span>
-                    <span className="text-[10px] text-emerald-300 font-extrabold uppercase">
-                      ({getLangName(patientLanguage)})
-                    </span>
-                    {hasRemotePeerStream && isDoctorUser && (
-                      <span className="ml-1 text-[9px] font-extrabold px-1.5 py-0.2 rounded bg-emerald-950 text-emerald-300 border border-emerald-800">
-                        LIVE P2P
-                      </span>
-                    )}
-
-                    {/* Live Mic Meter */}
-                    {isMicOn && (
-                      <div className="flex items-center gap-0.5 ml-1">
-                        <div 
-                          className="w-1 bg-emerald-400 rounded-full transition-all duration-75"
-                          style={{ height: `${Math.max(4, (localAudioLevel / 100) * 14)}px` }}
-                        />
-                        <div 
-                          className="w-1 bg-emerald-400 rounded-full transition-all duration-75"
-                          style={{ height: `${Math.max(6, (localAudioLevel / 100) * 18)}px` }}
-                        />
+                    {isDoctorSpeaking && (
+                      <div className="absolute bottom-2.5 left-2.5 sm:bottom-3 sm:left-3 px-2.5 py-1 rounded-full bg-blue-600/90 text-white text-[10px] font-black flex items-center gap-1.5 shadow-md animate-pulse z-20">
+                        <Activity className="w-3.5 h-3.5 animate-spin" />
+                        <span>Speaking in {getLangName(doctorLanguage)}...</span>
                       </div>
                     )}
                   </div>
+                );
+              })()}
 
-                  {/* Doctor Screen: Calling patient status badge */}
-                  {isDoctorUser && !hasRemotePeerStream && !isPeerConnected && (
-                    <div className="absolute top-12 left-2.5 sm:left-3 px-3 py-1.5 rounded-xl bg-amber-950/90 border border-amber-600/80 text-amber-300 text-[11px] font-black flex items-center gap-2 shadow-xl animate-pulse z-20">
-                      <PhoneIncoming className="w-3.5 h-3.5 text-amber-400 animate-bounce" />
-                      <span>Calling {effectivePatientName}'s dashboard...</span>
+              {/* 2. PATIENT VIDEO TILE */}
+              {(() => {
+                const isPatientMain = layoutMode === 'pip' && (isDoctorUser ? !isSwapped : isSwapped);
+                const isPatientPip = layoutMode === 'pip' && !isPatientMain;
+
+                const tileClass = layoutMode === 'grid'
+                  ? `relative w-full h-full rounded-2xl sm:rounded-3xl overflow-hidden bg-slate-900 border-2 transition-all flex items-center justify-center ${
+                      isDoctorUser ? 'order-1' : 'order-2'
+                    } ${
+                      isPatientSpeaking ? 'border-emerald-500 shadow-xl shadow-emerald-500/30 ring-4 ring-emerald-500/30' : 'border-slate-800'
+                    }`
+                  : isPatientMain
+                  ? `absolute inset-0 w-full h-full z-0 overflow-hidden bg-slate-950 flex items-center justify-center border-0 ${
+                      isPatientSpeaking ? 'ring-4 ring-emerald-500/40 ring-inset' : ''
+                    }`
+                  : `absolute bottom-3 right-3 sm:bottom-4 sm:right-4 w-36 sm:w-56 md:w-64 aspect-[4/3] rounded-2xl sm:rounded-3xl shadow-2xl border-2 z-20 cursor-pointer overflow-hidden transition-all duration-200 hover:scale-105 active:scale-95 group flex items-center justify-center bg-slate-900 ${
+                      isPatientSpeaking ? 'border-emerald-400 ring-4 ring-emerald-500/50' : 'border-white/30'
+                    }`;
+
+                return (
+                  <div 
+                    onClick={isPatientPip ? () => setIsSwapped(!isSwapped) : undefined}
+                    className={tileClass}
+                  >
+                    {!isDoctorUser ? (
+                      <>
+                        <video
+                          ref={localVideoRef}
+                          autoPlay
+                          playsInline
+                          muted
+                          className={`absolute inset-0 w-full h-full object-cover scale-x-[-1] z-10 ${
+                            hasHardwareCamera && isVideoOn ? 'block' : 'hidden'
+                          }`}
+                        />
+                        {(!hasHardwareCamera || !isVideoOn) && (
+                          <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-950 text-slate-400 gap-3 z-0 select-none">
+                            <div className="w-16 h-16 rounded-2xl bg-slate-900 border border-slate-800 flex items-center justify-center text-slate-500 shadow-inner">
+                              <VideoOff className="w-8 h-8 text-slate-500" />
+                            </div>
+                            <div className="text-center px-4">
+                              <p className="text-xs font-bold text-slate-300">Camera Feed Off</p>
+                              <p className="text-[10px] text-slate-500 mt-0.5">Turn on camera to show live video</p>
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      <>
+                        {(!isPeerConnected && !hasRemotePeerStream) ? (
+                          <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-950/95 text-slate-300 gap-4 p-6 text-center select-none z-20">
+                            <div className="relative flex items-center justify-center">
+                              <div className="w-20 h-20 rounded-full bg-emerald-500/20 border-2 border-emerald-500/40 animate-ping absolute inset-0" />
+                              <div className="w-20 h-20 rounded-full bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shadow-2xl relative z-10">
+                                <PhoneCall className="w-9 h-9 text-emerald-400 animate-bounce" />
+                              </div>
+                            </div>
+                            <div className="space-y-1.5 max-w-xs">
+                              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-950/80 border border-emerald-800 text-[11px] font-black text-emerald-300 uppercase tracking-wider">
+                                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                                Calling Patient...
+                              </div>
+                              <p className="text-base font-extrabold text-white">{effectivePatientName}</p>
+                              <p className="text-xs text-slate-400">Ringing patient device... Video will start once the patient accepts the call.</p>
+                            </div>
+                          </div>
+                        ) : (
+                          <>
+                            <video
+                              ref={remoteVideoRef}
+                              autoPlay
+                              playsInline
+                              className={`absolute inset-0 w-full h-full object-cover z-10 ${
+                                isVideoOn ? 'block' : 'hidden'
+                              }`}
+                            />
+                            {!isVideoOn && (
+                              <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-950 text-slate-400 gap-3 z-0 select-none">
+                                <div className="w-16 h-16 rounded-2xl bg-emerald-950/40 border border-emerald-900/50 flex items-center justify-center text-emerald-400 shadow-inner animate-pulse">
+                                  <VideoOff className="w-8 h-8 text-emerald-400" />
+                                </div>
+                                <div className="text-center px-4">
+                                  <p className="text-xs font-bold text-emerald-200">Patient's Live Camera</p>
+                                  <p className="text-[10px] text-slate-500 mt-0.5">Camera is turned off</p>
+                                </div>
+                              </div>
+                            )}
+                          </>
+                        )}
+                      </>
+                    )}
+
+                    {isPatientPip && (
+                      <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center z-30 pointer-events-none">
+                        <span className="text-[10px] sm:text-xs font-bold text-white bg-slate-900/90 px-2.5 py-1 rounded-full border border-white/20 flex items-center gap-1 shadow-lg">
+                          <RotateCcw className="w-3 h-3 text-cyan-400" /> Tap to swap
+                        </span>
+                      </div>
+                    )}
+
+                    <div className="absolute top-2.5 left-2.5 sm:top-3 sm:left-3 px-2.5 py-1 rounded-xl bg-slate-950/85 backdrop-blur-md border border-slate-700 text-[11px] font-bold flex items-center gap-1.5 z-20">
+                      <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                      <span className="text-emerald-200">
+                        {!isDoctorUser ? `You (${effectivePatientName})` : `${effectivePatientName} (Patient)`}
+                      </span>
+                      <span className="text-[10px] text-emerald-300 font-extrabold uppercase">
+                        ({getLangName(patientLanguage)})
+                      </span>
+
+                      {isMicOn && (
+                        <div className="flex items-center gap-0.5 ml-1">
+                          <div 
+                            className="w-1 bg-emerald-400 rounded-full transition-all duration-75"
+                            style={{ height: `${Math.max(4, (localAudioLevel / 100) * 14)}px` }}
+                          />
+                          <div 
+                            className="w-1 bg-emerald-400 rounded-full transition-all duration-75"
+                            style={{ height: `${Math.max(6, (localAudioLevel / 100) * 18)}px` }}
+                          />
+                        </div>
+                      )}
                     </div>
-                  )}
 
-                  {/* Patient Speaking Wave */}
-                  {isPatientSpeaking && (
-                    <div className="absolute bottom-2.5 left-2.5 sm:bottom-3 sm:left-3 px-2.5 py-1 rounded-full bg-emerald-600/90 text-white text-[10px] font-black flex items-center gap-1.5 shadow-md animate-pulse z-20">
-                      <Activity className="w-3.5 h-3.5 animate-spin" />
-                      <span>Speaking in {getLangName(patientLanguage)}...</span>
-                    </div>
-                  )}
-                </div>
-
-              </div>
-            ) : (
-              /* PICTURE-IN-PICTURE (Focus Mode) */
-              <div className="w-full h-full relative rounded-2xl sm:rounded-3xl overflow-hidden bg-slate-900 border border-slate-800">
-                <canvas
-                  ref={isDoctorUser ? patientCanvasRef : doctorCanvasRef}
-                  width={640}
-                  height={360}
-                  className="w-full h-full object-cover"
-                />
-
-                <div className="absolute bottom-4 right-4 w-36 sm:w-48 h-24 sm:h-32 rounded-2xl overflow-hidden bg-slate-950 border-2 border-emerald-500 shadow-2xl flex items-center justify-center">
-                  <div className="text-[11px] text-slate-300 font-bold">
-                    You ({isDoctorUser ? effectiveDoctorName : effectivePatientName})
+                    {isPatientSpeaking && (
+                      <div className="absolute bottom-2.5 left-2.5 sm:bottom-3 sm:left-3 px-2.5 py-1 rounded-full bg-emerald-600/90 text-white text-[10px] font-black flex items-center gap-1.5 shadow-md animate-pulse z-20">
+                        <Activity className="w-3.5 h-3.5 animate-spin" />
+                        <span>Speaking in {getLangName(patientLanguage)}...</span>
+                      </div>
+                    )}
                   </div>
-                </div>
+                );
+              })()}
+
+            </div>
+
+            {/* LIVE SPEECH INTERIM INDICATOR (While speaking) */}
+            {localLiveSpeech && (
+              <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 pointer-events-none max-w-lg w-[90%] bg-slate-950/90 backdrop-blur-md border border-cyan-500/40 rounded-2xl px-4 py-2 text-center shadow-2xl animate-pulse">
+                <span className="text-[10px] font-black uppercase text-cyan-400 tracking-wider flex items-center justify-center gap-1">
+                  <Mic className="w-3 h-3 animate-bounce" /> Transcribing Live Voice ({getLangName(activeSpeakerRole === 'doctor' ? doctorLanguage : patientLanguage)})...
+                </span>
+                <p className="text-xs font-semibold text-slate-100 italic mt-0.5">
+                  "{localLiveSpeech}"
+                </p>
               </div>
             )}
 
-            {/* FLOATING CLOSED-CAPTION OVERLAY (Rendered ONLY after a conversation is made) */}
+            {/* ═════════════════════════════════════════════════════════════════════ */}
+            {/* FLOATING REAL-TIME TRANSLATED SUBTITLES (OPPOSITE PERSON'S LANGUAGE) */}
+            {/* ═════════════════════════════════════════════════════════════════════ */}
             {isCaptionsVisible && currentCaption && ((currentCaption.original || '').trim() || (currentCaption.translated || '').trim()) && (
-              <div className="absolute bottom-2 sm:bottom-4 left-2 sm:left-4 right-2 sm:right-4 z-20 flex justify-center pointer-events-none">
-                <div className="pointer-events-auto max-w-2xl w-full bg-slate-950/90 backdrop-blur-xl border border-slate-700/80 rounded-2xl p-2.5 sm:p-3.5 shadow-2xl space-y-1.5 animate-in fade-in slide-in-from-bottom-2 duration-150">
-                  
-                  {/* Caption Header: Speaker & Translation Target */}
-                  <div className="flex items-center justify-between text-[11px] font-bold">
-                    <div className="flex items-center gap-1.5 truncate">
-                      <span className={`px-2 py-0.5 rounded-md text-[10px] font-black uppercase ${
-                        currentCaption.speakerRole === 'doctor' ? 'bg-blue-900/90 text-blue-300' : 'bg-emerald-900/90 text-emerald-300'
-                      }`}>
-                        {currentCaption.speakerName} ({getLangName(currentCaption.sourceLang)})
-                      </span>
-                      <span className="text-slate-500">⟶</span>
-                      <span className="text-brand-mint font-extrabold truncate">
-                        Translated for {currentCaption.targetPerson} ({getLangName(currentCaption.targetLang)}):
-                      </span>
-                    </div>
-
-                    {/* Replay, Audio Status & Dismiss Button */}
-                    <div className="flex items-center gap-1.5 flex-shrink-0">
-                      {audioPlayingTarget && (
-                        <div className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-950 border border-emerald-700 text-emerald-300 text-[10px] animate-pulse">
-                          <Volume2 className="w-3 h-3 text-emerald-400" />
-                          <span>Voice Playing...</span>
-                        </div>
-                      )}
-
-                      <button
-                        onClick={() => handleReplayAudio(
-                          currentCaption.translated, 
-                          currentCaption.targetLang, 
-                          currentCaption.audioBase64, 
-                          currentCaption.targetPerson
-                        )}
-                        className="p-1 sm:px-2 sm:py-0.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11px] font-bold transition active:scale-95 flex items-center gap-1 cursor-pointer"
-                        title="Replay translated audio"
-                      >
-                        <RotateCcw className="w-3 h-3 text-brand-mint" />
-                        <span className="hidden sm:inline">Replay</span>
-                      </button>
-
-                      <button
-                        onClick={() => setCurrentCaption(null)}
-                        className="p-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition cursor-pointer"
-                        title="Dismiss caption overlay"
-                      >
-                        <X className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
+              <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-30 pointer-events-auto max-w-xl w-[94%] bg-slate-950/92 backdrop-blur-xl border border-cyan-500/40 rounded-2xl p-3.5 sm:p-4 shadow-2xl text-center space-y-2 animate-in fade-in slide-in-from-bottom-2 duration-150">
+                
+                {/* Subtitle Header / Direction Badge */}
+                <div className="flex items-center justify-between text-[11px] text-slate-400 pb-1.5 border-b border-slate-800">
+                  <div className="flex items-center gap-1.5 truncate">
+                    <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase ${
+                      currentCaption.speakerRole === 'doctor' ? 'bg-blue-950 text-blue-300 border border-blue-800' : 'bg-emerald-950 text-emerald-300 border border-emerald-800'
+                    }`}>
+                      {currentCaption.speakerName} ({getLangName(currentCaption.sourceLang)})
+                    </span>
+                    <span className="text-cyan-400 font-black">⟶</span>
+                    <span className="text-cyan-300 text-[10px] font-black uppercase tracking-wider truncate">
+                      Subtitles for {currentCaption.targetPerson} ({getLangName(currentCaption.targetLang)})
+                    </span>
                   </div>
 
-                  {/* Original Spoken Text (Only rendered if non-empty) */}
-                  {currentCaption.original && currentCaption.original.trim() && (
-                    <p className="text-[11px] text-slate-400 font-medium italic line-clamp-1">
-                      "{currentCaption.original.trim()}"
-                    </p>
-                  )}
-
-                  {/* High-Contrast Translated Subtitle (Only rendered if non-empty) */}
-                  {currentCaption.translated && currentCaption.translated.trim() && (
-                    <div className="p-2 rounded-xl bg-slate-900/90 border border-slate-800/80 flex items-start gap-1.5">
-                      <span className="text-brand-mint font-black text-xs mt-0.5">↳</span>
-                      <p className="text-xs sm:text-sm font-black text-white leading-relaxed">
-                        "{currentCaption.translated.trim()}"
-                      </p>
-                    </div>
-                  )}
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    {audioPlayingTarget && (
+                      <span className="text-[10px] text-emerald-400 font-bold flex items-center gap-1 animate-pulse">
+                        <Volume2 className="w-3.5 h-3.5 text-emerald-400" /> Playing Audio
+                      </span>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => handleReplayAudio(
+                        currentCaption.translated,
+                        currentCaption.targetLang,
+                        currentCaption.audioBase64,
+                        currentCaption.targetPerson
+                      )}
+                      className="px-2 py-1 rounded-lg bg-cyan-950 hover:bg-cyan-900 text-cyan-300 border border-cyan-700 text-[10px] font-black transition flex items-center gap-1 cursor-pointer active:scale-95"
+                      title="Listen to translated audio output again"
+                    >
+                      <RotateCcw className="w-3 h-3 text-cyan-400" />
+                      <span>Replay Voice</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCurrentCaption(null)}
+                      className="p-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition cursor-pointer"
+                      title="Dismiss Subtitles"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                 </div>
+
+                {/* Primary: Translated Subtitle in Listener's Native Language */}
+                {currentCaption.translated && currentCaption.translated.trim() && (
+                  <div className="bg-cyan-950/40 rounded-xl p-2.5 border border-cyan-500/30">
+                    <p className="text-sm sm:text-base font-black text-cyan-100 leading-relaxed tracking-wide">
+                      "{currentCaption.translated.trim()}"
+                    </p>
+                  </div>
+                )}
+
+                {/* Secondary: Original Spoken Utterance */}
+                {currentCaption.original && currentCaption.original.trim() && currentCaption.original.trim() !== (currentCaption.translated || '').trim() && (
+                  <p className="text-[11px] sm:text-xs text-slate-300 font-medium italic">
+                    Original: "{currentCaption.original.trim()}"
+                  </p>
+                )}
               </div>
             )}
 
@@ -1589,15 +1601,15 @@ export function VideoConsultationModal({
             {/* Sidebar Header */}
             <div className="p-3 border-b border-slate-800 flex items-center justify-between flex-shrink-0">
               <div className="flex items-center gap-2">
-                <Globe className="w-4 h-4 text-emerald-400" />
+                <Globe className="w-4 h-4 text-cyan-400" />
                 <h3 className="font-extrabold text-xs text-slate-200">
-                  Live Bilingual Transcript
+                  Live Bilingual Transcript & Audio
                 </h3>
               </div>
               
               <button
                 onClick={() => setIsSidebarOpen(false)}
-                className="p-1 rounded-lg text-slate-400 hover:text-white transition lg:hidden"
+                className="p-1 rounded-lg text-slate-400 hover:text-white transition lg:hidden cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -1612,13 +1624,13 @@ export function VideoConsultationModal({
                 if (validTranscript.length === 0) {
                   return (
                     <div className="h-full min-h-[140px] flex flex-col items-center justify-center text-center p-5 text-slate-500 space-y-2.5">
-                      <div className="w-10 h-10 rounded-2xl bg-slate-800/80 border border-slate-700/60 flex items-center justify-center text-brand-mint shadow-inner">
-                        <MessageSquare className="w-5 h-5 text-emerald-400" />
+                      <div className="w-10 h-10 rounded-2xl bg-slate-800/80 border border-slate-700/60 flex items-center justify-center text-cyan-400 shadow-inner">
+                        <MessageSquare className="w-5 h-5 text-cyan-400" />
                       </div>
                       <div className="space-y-1">
-                        <p className="text-xs font-bold text-slate-200">No conversation yet</p>
+                        <p className="text-xs font-bold text-slate-200">No conversation turns yet</p>
                         <p className="text-[11px] text-slate-400 leading-relaxed max-w-xs">
-                          Live subtitles and voice translations will appear here once either participant speaks or sends a message.
+                          Live subtitles and translated voice audio will automatically generate here once either participant speaks.
                         </p>
                       </div>
                     </div>
@@ -1631,7 +1643,7 @@ export function VideoConsultationModal({
                   return (
                     <div
                       key={msg.id}
-                      className={`p-2.5 rounded-xl border space-y-1 transition ${
+                      className={`p-2.5 rounded-xl border space-y-1.5 transition ${
                         isDoc ? 'bg-blue-950/40 border-blue-900/60' : 'bg-emerald-950/40 border-emerald-900/60'
                       }`}
                     >
@@ -1644,10 +1656,10 @@ export function VideoConsultationModal({
                           {transText && (
                             <button
                               onClick={() => handleReplayAudio(transText, msg.targetLang, msg.audioBase64, msg.speaker)}
-                              className="text-brand-mint hover:text-white transition p-0.5 cursor-pointer"
-                              title="Listen to audio"
+                              className="text-cyan-400 hover:text-white transition p-0.5 cursor-pointer"
+                              title="Play translated speech"
                             >
-                              <Volume2 className="w-3 h-3" />
+                              <Volume2 className="w-3.5 h-3.5" />
                             </button>
                           )}
                         </div>
@@ -1661,9 +1673,9 @@ export function VideoConsultationModal({
 
                       {transText && (
                         <div className="pt-1 border-t border-slate-800/60 flex items-start gap-1">
-                          <span className="text-brand-mint font-black text-[10px]">↳</span>
+                          <span className="text-cyan-400 font-black text-[10px]">↳</span>
                           <p className="text-white font-bold text-[11px] leading-relaxed">
-                            "{transText}"
+                            "{transText}" ({getLangName(msg.targetLang)})
                           </p>
                         </div>
                       )}
@@ -1677,35 +1689,51 @@ export function VideoConsultationModal({
             {/* Quick Dialogue Presets & Free Speech Input */}
             <div className="p-2.5 border-t border-slate-800 space-y-2 flex-shrink-0 bg-slate-900">
               
-              <div className="flex items-center justify-between text-[10px] text-slate-400">
-                <span className="font-extrabold text-slate-300 flex items-center gap-1">
-                  <Sparkles className="w-3 h-3 text-brand-mint" />
-                  <span>Click to speak as {isDoctorUser ? effectiveDoctorName : effectivePatientName}:</span>
-                </span>
-                {isTranslating && <span className="text-brand-mint animate-pulse font-bold">Translating...</span>}
+              {/* Speaker Role Selector for Sandbox Testing */}
+              <div className="flex items-center justify-between gap-1 p-1 bg-slate-950 rounded-xl border border-slate-800">
+                <button
+                  onClick={() => setActiveSpeakerRole('doctor')}
+                  className={`flex-1 py-1 rounded-lg text-[10px] font-black transition cursor-pointer ${
+                    activeSpeakerRole === 'doctor' 
+                      ? 'bg-blue-600 text-white shadow-md' 
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  👨‍⚕️ Speak as Doctor ({getLangName(doctorLanguage)})
+                </button>
+                <button
+                  onClick={() => setActiveSpeakerRole('patient')}
+                  className={`flex-1 py-1 rounded-lg text-[10px] font-black transition cursor-pointer ${
+                    activeSpeakerRole === 'patient' 
+                      ? 'bg-emerald-600 text-white shadow-md' 
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  👤 Speak as Patient ({getLangName(patientLanguage)})
+                </button>
               </div>
 
-              {/* Fast presets for current role */}
+              {/* Dynamic Quick Presets adapted to current active role */}
               <div className="space-y-1">
-                {isDoctorUser ? (
+                {activeSpeakerRole === 'doctor' ? (
                   <>
                     <button
-                      onClick={() => handleCompleteTurn(`Hello ${effectivePatientName}! Can you describe what discomfort you are feeling today?`)}
-                      className="w-full text-left p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-[10px] font-semibold border border-slate-700 transition truncate"
+                      onClick={() => handleCompleteTurn(`Hello ${effectivePatientName}! Can you describe what symptoms you are experiencing today?`, 'doctor')}
+                      className="w-full text-left p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-[10px] font-semibold border border-slate-700 transition truncate cursor-pointer"
                     >
-                      "Hello {effectivePatientName}! What discomfort are you feeling today?"
+                      "Hello! What symptoms are you experiencing today?"
                     </button>
                     <button
-                      onClick={() => handleCompleteTurn("On a scale from 1 to 10, how intense is your pain right now?")}
-                      className="w-full text-left p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-[10px] font-semibold border border-slate-700 transition truncate"
+                      onClick={() => handleCompleteTurn("Please take this medication twice daily with warm water.", 'doctor')}
+                      className="w-full text-left p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-[10px] font-semibold border border-slate-700 transition truncate cursor-pointer"
                     >
-                      "On a scale from 1 to 10, how intense is your pain right now?"
+                      "Please take this medication twice daily with warm water."
                     </button>
                     <button
-                      onClick={() => handleCompleteTurn("I am prescribing an anti-inflammatory medication. Please rest for two days.")}
-                      className="w-full text-left p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-[10px] font-semibold border border-slate-700 transition truncate"
+                      onClick={() => handleCompleteTurn("I recommend getting a complete blood count test done today.", 'doctor')}
+                      className="w-full text-left p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-[10px] font-semibold border border-slate-700 transition truncate cursor-pointer"
                     >
-                      "I am prescribing an anti-inflammatory. Please rest."
+                      "I recommend getting a blood count test done today."
                     </button>
                   </>
                 ) : (
@@ -1714,29 +1742,31 @@ export function VideoConsultationModal({
                       onClick={() => handleCompleteTurn(
                         patientLanguage === 'kn' ? "ನನಗೆ ಎರಡು ದಿನಗಳಿಂದ ತೀವ್ರ ತಲೆನೋವು ಮತ್ತು ಜ್ವರವಿದೆ ಡಾಕ್ಟರೇ." :
                         patientLanguage === 'ta' ? "எனக்கு இரண்டு நாட்களாக கடுமையான தலைவலியும் காய்ச்சலும் உள்ளது." :
-                        patientLanguage === 'te' ? "నాకు రెండు రోజులుగా తీవ్రమైన ತలనొప్పి మరియు జ్వరం ఉంది." :
-                        "मुझे दो दिनों से तेज सिरदर्द और बुखार है डॉक्टर।"
+                        patientLanguage === 'te' ? "నాకు రెండు రోజులుగా తీవ్రమైన తలనొప్పి మరియు జ్వరం ఉంది." :
+                        "मुझे दो दिनों से तेज सिरदर्द और बुखार है डॉक्टर।",
+                        'patient'
                       )}
-                      className="w-full text-left p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-emerald-300 text-[10px] font-semibold border border-slate-700 transition truncate"
+                      className="w-full text-left p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-emerald-300 text-[10px] font-semibold border border-slate-700 transition truncate cursor-pointer"
                     >
                       {patientLanguage === 'kn' ? '"ನನಗೆ ಎರಡು ದಿನಗಳಿಂದ ತಲೆನೋವು ಮತ್ತು ಜ್ವರವಿದೆ ಡಾಕ್ಟರೇ."' :
                        patientLanguage === 'ta' ? '"எனக்கு இரண்டு நாட்களாக தலைவலி மற்றும் காய்ச்சல் உள்ளது."' :
-                       patientLanguage === 'te' ? '"నాకు రెండు రోజులుగా ತలనొప్పి మరియు జ్వరం ఉంది."' :
+                       patientLanguage === 'te' ? '"నాకు రెండు రోజులుగా తలనొప్పి మరియు జ్వరం ఉంది."' :
                        '"मुझे दो दिनों से सिरदर्द और बुखार है डॉक्टर।"'}
                     </button>
                     <button
                       onClick={() => handleCompleteTurn(
-                        patientLanguage === 'kn' ? "ನೋವು ಸುಮಾರು 6 ರಷ್ಟಿದೆ, ನಿದ್ರೆ ಮಾಡಲು ಸಾಧ್ಯವಾಗುತ್ತಿಲ್ಲ." :
-                        patientLanguage === 'ta' ? "வலி சுமார் 6 ஆக உள்ளது, தூங்க முடியவில்லை." :
-                        patientLanguage === 'te' ? "నొప్పి దాదాపు 6 గా ఉంది, నిద్ర పట్టడం లేదు." :
-                        "दर्द 6 के करीब है और सोने में परेशानी हो रही है।"
+                        patientLanguage === 'kn' ? "ನಾನು ಯಾವಾಗ ಈ ಔಷಧಿಗಳನ್ನು ತೆಗೆದುಕೊಳ್ಳಬೇಕು?" :
+                        patientLanguage === 'ta' ? "நான் எப்போது இந்த மருந்துகளை எடுத்துக்கொள்ள வேண்டும்?" :
+                        patientLanguage === 'te' ? "నేను ఎప్పుడు ఈ మందులు తీసుకోవాలి?" :
+                        "मुझे यह दवाइयां कब लेनी चाहिए?",
+                        'patient'
                       )}
-                      className="w-full text-left p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-emerald-300 text-[10px] font-semibold border border-slate-700 transition truncate"
+                      className="w-full text-left p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-emerald-300 text-[10px] font-semibold border border-slate-700 transition truncate cursor-pointer"
                     >
-                      {patientLanguage === 'kn' ? '"ನೋವು ಸುಮಾರು 6 ರಷ್ಟಿದೆ, ನಿದ್ರೆ ಮಾಡಲು ಸಾಧ್ಯವಾಗುತ್ತಿಲ್ಲ."' :
-                       patientLanguage === 'ta' ? '"வலி சுமார் 6 ஆக உள்ளது, தூங்க முடியவில்லை."' :
-                       patientLanguage === 'te' ? '"నొప్పి దాదాపు 6 గా ఉంది, నిద్ర పట్టడం లేదు."' :
-                       '"दर्द 6 के करीब है और सोने में परेशानी हो रही है।"'}
+                      {patientLanguage === 'kn' ? '"ನಾನು ಯಾವಾಗ ಈ ಔಷಧಿಗಳನ್ನು ತೆಗೆದುಕೊಳ್ಳಬೇಕು?"' :
+                       patientLanguage === 'ta' ? '"நான் எப்போது இந்த மருந்துகளை எடுத்துக்கொள்ள வேண்டும்?"' :
+                       patientLanguage === 'te' ? '"నేను ఎప్పుడు ఈ మందులు తీసుకోవాలి?"' :
+                       '"मुझे यह दवाइयां कब लेनी चाहिए?"'}
                     </button>
                   </>
                 )}
@@ -1746,7 +1776,7 @@ export function VideoConsultationModal({
               <div className="flex items-center gap-1.5 bg-slate-800 p-1 rounded-xl border border-slate-700">
                 <button
                   onClick={handleToggleMicSpeech}
-                  className={`p-1.5 rounded-lg transition ${
+                  className={`p-1.5 rounded-lg transition cursor-pointer ${
                     isListeningSpeech ? 'bg-red-500 text-white animate-bounce' : 'bg-slate-700 hover:bg-slate-600 text-slate-200'
                   }`}
                   title={isListeningSpeech ? "Stop Listening" : "Click to speak with microphone"}
@@ -1762,8 +1792,8 @@ export function VideoConsultationModal({
                   placeholder={
                     isListeningSpeech 
                       ? "Listening to voice..." 
-                      : isDoctorUser 
-                      ? "Speak or type in English..." 
+                      : activeSpeakerRole === 'doctor' 
+                      ? `Speak or type in ${getLangName(doctorLanguage)}...` 
                       : `Speak or type in ${getLangName(patientLanguage)}...`
                   }
                   className="flex-1 bg-transparent px-1.5 text-[11px] text-white placeholder-slate-400 focus:outline-none"
@@ -1772,8 +1802,8 @@ export function VideoConsultationModal({
                 <button
                   onClick={() => handleCompleteTurn()}
                   disabled={!inputText.trim() || isTranslating}
-                  className="p-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white transition active:scale-95 cursor-pointer"
-                  title="Send turn to translate and speak"
+                  className="p-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 disabled:opacity-40 text-white transition active:scale-95 cursor-pointer"
+                  title="Translate and speak turn"
                 >
                   <Send className="w-3.5 h-3.5" />
                 </button>
@@ -1831,7 +1861,7 @@ export function VideoConsultationModal({
             onClick={() => setIsCaptionsVisible(!isCaptionsVisible)}
             className={`p-3 rounded-full transition active:scale-95 shadow-md cursor-pointer ${
               isCaptionsVisible 
-                ? 'bg-blue-600 text-white border border-blue-500' 
+                ? 'bg-cyan-600 text-white border border-cyan-500 shadow-cyan-600/30' 
                 : 'bg-slate-800 hover:bg-slate-700 text-slate-400 border border-slate-700'
             }`}
             title="Toggle Live Closed-Captions Overlay"
@@ -1839,18 +1869,30 @@ export function VideoConsultationModal({
             <span className="text-xs font-black">CC</span>
           </button>
 
-          {/* Audio Voice Toggle */}
+          {/* Audio Voice Output (TTS) Toggle */}
           <button
             onClick={() => setIsTtsActive(!isTtsActive)}
             className={`p-3 rounded-full transition active:scale-95 shadow-md cursor-pointer ${
               isTtsActive 
-                ? 'bg-emerald-600 text-white border border-emerald-500' 
+                ? 'bg-emerald-600 text-white border border-emerald-500 shadow-emerald-600/30' 
                 : 'bg-slate-800 hover:bg-slate-700 text-slate-400 border border-slate-700'
             }`}
             title="Toggle Automatic Speech Audio Output"
           >
             {isTtsActive ? <Volume2 className="w-5 h-5" /> : <VolumeX className="w-5 h-5" />}
           </button>
+
+          {/* Doctor In-Call Action: Prescribe & Order Labs */}
+          {isDoctorUser && (
+            <button
+              onClick={handleOpenInCallRx}
+              className="p-3 px-4 rounded-full bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-black text-xs flex items-center gap-1.5 shadow-lg shadow-emerald-600/30 transition active:scale-95 cursor-pointer ml-1"
+              title="Issue Prescription & Recommend Diagnostic Labs"
+            >
+              <FlaskConical className="w-4 h-4" />
+              <span className="hidden md:inline">Prescribe & Labs</span>
+            </button>
+          )}
 
           {/* End Call Button */}
           <button
@@ -1869,17 +1911,24 @@ export function VideoConsultationModal({
           
           <button
             onClick={() => setLayoutMode(layoutMode === 'grid' ? 'pip' : 'grid')}
-            className="p-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 transition hidden sm:flex cursor-pointer"
-            title="Toggle Layout Mode"
+            className={`px-3 py-2 rounded-xl transition flex items-center gap-1.5 cursor-pointer border ${
+              layoutMode === 'pip'
+                ? 'bg-cyan-950/80 border-cyan-600 text-cyan-300 font-bold shadow-xs'
+                : 'bg-slate-800 hover:bg-slate-700 border-slate-700 text-slate-300'
+            }`}
+            title={layoutMode === 'pip' ? "Switch to Split Grid Mode (50/50)" : "Switch to FaceTime PiP Mode"}
           >
-            {layoutMode === 'grid' ? <Layout className="w-4 h-4" /> : <Grid className="w-4 h-4" />}
+            {layoutMode === 'grid' ? <Layout className="w-4 h-4 text-blue-400" /> : <Grid className="w-4 h-4 text-emerald-400" />}
+            <span className="text-xs font-bold hidden sm:inline">
+              {layoutMode === 'pip' ? 'FaceTime' : 'Split Grid'}
+            </span>
           </button>
 
           {/* Toggle Sidebar / Chat Drawer */}
           <button
             onClick={() => setIsSidebarOpen(!isSidebarOpen)}
             className={`p-2.5 rounded-xl transition flex items-center gap-1.5 cursor-pointer ${
-              isSidebarOpen ? 'bg-emerald-600 text-white font-bold' : 'bg-slate-800 hover:bg-slate-700 text-slate-300'
+              isSidebarOpen ? 'bg-cyan-600 text-white font-bold' : 'bg-slate-800 hover:bg-slate-700 text-slate-300'
             }`}
             title="Toggle Live Transcript & Presets Panel"
           >
@@ -1890,6 +1939,190 @@ export function VideoConsultationModal({
         </div>
 
       </footer>
+
+      {/* In-Call Doctor Prescription & Lab Order Modal */}
+      {isInCallRxOpen && (
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
+          <div className="relative w-full max-w-2xl bg-white rounded-3xl shadow-2xl border border-slate-100 overflow-hidden my-6 text-slate-900 animate-in fade-in zoom-in duration-200">
+            
+            {/* Header */}
+            <div className="p-6 bg-gradient-to-r from-slate-900 via-emerald-950 to-slate-900 text-white relative">
+              <button 
+                onClick={() => setIsInCallRxOpen(false)}
+                className="absolute top-5 right-5 w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-white transition cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-emerald-500/20 border border-emerald-400/30 flex items-center justify-center text-emerald-400">
+                  <FlaskConical className="w-5 h-5" />
+                </div>
+                <div>
+                  <span className="text-xs font-black uppercase tracking-wider text-emerald-400">
+                    Active Video Consultation
+                  </span>
+                  <h3 className="text-lg font-black text-white">
+                    Issue Prescription & Diagnostic Lab Order
+                  </h3>
+                </div>
+              </div>
+              
+              <div className="flex items-center gap-3 mt-3 text-xs text-slate-300">
+                <span>Patient: <strong className="text-white">{effectivePatientName}</strong></span>
+                <span>•</span>
+                <span>Doctor: <strong className="text-white">{effectiveDoctorName}</strong></span>
+              </div>
+            </div>
+
+            {/* Content Body */}
+            <div className="p-6 space-y-5 max-h-[70vh] overflow-y-auto">
+              
+              {inCallRxSuccess && (
+                <div className="p-4 rounded-2xl bg-emerald-50 border-2 border-emerald-200 text-emerald-900 text-xs font-bold flex items-center gap-2 animate-in fade-in">
+                  <CheckCircle2 className="w-5 h-5 text-emerald-600 flex-shrink-0" />
+                  <span>{inCallRxSuccess}</span>
+                </div>
+              )}
+
+              {/* 1. Prescribe Medications */}
+              <div className="space-y-3">
+                <label className="text-xs font-black text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+                  <Pill className="w-4 h-4 text-emerald-600" />
+                  <span>Prescribed Medications</span>
+                </label>
+
+                <div className="space-y-2">
+                  {inCallMeds.map((m, idx) => (
+                    <div key={idx} className="p-2.5 rounded-2xl bg-slate-50 border border-slate-200 flex items-center justify-between text-xs">
+                      <div>
+                        <span className="font-extrabold text-slate-900">{m.name}</span>
+                        <span className="text-slate-500 ml-2">({m.dosage} • {m.frequency})</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveInCallMed(idx)}
+                        className="p-1 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 transition cursor-pointer"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Add new medication */}
+                <div className="flex flex-col sm:flex-row gap-2 pt-1">
+                  <input
+                    type="text"
+                    value={newMedName}
+                    onChange={(e) => setNewMedName(e.target.value)}
+                    placeholder="Medicine name (e.g. Azithromycin 500mg)"
+                    className="flex-1 p-2 rounded-xl bg-slate-50 border border-slate-200 text-xs font-medium focus:outline-none focus:border-emerald-500"
+                  />
+                  <input
+                    type="text"
+                    value={newMedDosage}
+                    onChange={(e) => setNewMedDosage(e.target.value)}
+                    placeholder="Dosage (e.g. 1 tab once daily for 3 days)"
+                    className="flex-1 p-2 rounded-xl bg-slate-50 border border-slate-200 text-xs font-medium focus:outline-none focus:border-emerald-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleAddInCallMed}
+                    disabled={!newMedName.trim()}
+                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-bold rounded-xl transition flex items-center justify-center gap-1 cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Add</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* 2. Recommend Diagnostic Lab Tests */}
+              <div className="space-y-3 pt-3 border-t border-slate-100">
+                <label className="text-xs font-black text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+                  <FlaskConical className="w-4 h-4 text-teal-600" />
+                  <span>Recommended Diagnostic Lab Tests</span>
+                </label>
+                <p className="text-[11px] text-slate-500">
+                  Select tests to recommend. Laboratories with highest instrument precision will be ranked for the patient.
+                </p>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {inCallCatalogTests.map(t => {
+                    const isSelected = inCallSelectedTests.includes(t.id);
+                    return (
+                      <div
+                        key={t.id}
+                        onClick={() => handleToggleInCallTest(t.id)}
+                        className={`p-3 rounded-2xl border-2 transition cursor-pointer flex items-start gap-2.5 ${
+                          isSelected ? 'bg-teal-50 border-teal-500 shadow-sm' : 'bg-slate-50 border-slate-200 hover:border-slate-300'
+                        }`}
+                      >
+                        <div className={`w-4 h-4 rounded mt-0.5 flex items-center justify-center border ${
+                          isSelected ? 'bg-teal-600 border-teal-600 text-white' : 'border-slate-300 bg-white'
+                        }`}>
+                          {isSelected && <CheckCircle2 className="w-3 h-3" />}
+                        </div>
+                        <div className="min-w-0">
+                          <h5 className="font-extrabold text-xs text-slate-900">{t.name}</h5>
+                          <span className="text-[10px] text-teal-700 font-semibold">{t.category}</span>
+                          <p className="text-[10px] text-slate-500 mt-0.5 line-clamp-1">{t.clinical_significance}</p>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* 3. Clinical Notes */}
+              <div className="space-y-1.5 pt-3 border-t border-slate-100">
+                <label className="text-xs font-black text-slate-800 uppercase tracking-wider">
+                  Clinical Advice & Notes
+                </label>
+                <textarea
+                  value={inCallNotes}
+                  onChange={(e) => setInCallNotes(e.target.value)}
+                  rows={2}
+                  className="w-full p-2.5 rounded-2xl bg-slate-50 border border-slate-200 text-xs font-medium focus:outline-none focus:border-emerald-500"
+                  placeholder="Additional patient guidance or dietary precautions..."
+                />
+              </div>
+
+            </div>
+
+            {/* Footer */}
+            <div className="p-4 px-6 bg-slate-50 border-t border-slate-100 flex items-center justify-between">
+              <button
+                type="button"
+                onClick={() => setIsInCallRxOpen(false)}
+                className="px-4 py-2 text-xs font-bold text-slate-600 hover:text-slate-900 transition cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleSendInCallRx}
+                disabled={isSubmittingInCallRx}
+                className="px-6 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white text-xs font-black rounded-xl shadow-lg shadow-emerald-600/30 transition active:scale-95 flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+              >
+                {isSubmittingInCallRx ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Transmitting Order...</span>
+                  </>
+                ) : (
+                  <>
+                    <Send className="w-3.5 h-3.5" />
+                    <span>Transmit Prescription & Lab Order</span>
+                  </>
+                )}
+              </button>
+            </div>
+
+          </div>
+        </div>
+      )}
 
     </div>
   );

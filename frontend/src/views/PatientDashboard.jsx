@@ -3,17 +3,24 @@ import {
   Bell, Search, Star, Calendar, Clock, CheckCircle2, 
   AlertCircle, ArrowUpRight, Video, Pill, Heart, Activity, 
   MapPin, ChevronRight, Mic, MicOff, Send, Sparkles, 
-  History, CalendarDays, ShieldAlert, Check, Plus, Volume2
+  History, CalendarDays, ShieldAlert, Check, Plus, Volume2,
+  Microscope, FlaskConical, Building2, Gauge, Award, CheckCircle, ChevronDown, ChevronUp, FileText,
+  X, Home, Phone
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
 import { api } from '../utils/api';
 import { startListening, stopListening, speakText, isSpeechRecognitionSupported } from '../utils/speech';
+import { PrescribedLabTestsCard } from '../components/PrescribedLabTestsCard';
+import { DigitalTwinDashboard } from '../components/digitaltwin/DigitalTwinDashboard';
 
-export function PatientDashboard({ onOpenAiTriage, onOpenEmergency, onOpenVideoConsult }) {
+export function PatientDashboard({ onOpenAiTriage, onOpenEmergency, onOpenVideoConsult, activeTab, setActiveTab }) {
   const { user } = useAuth();
   const { currentLanguage, setLanguage, supportedLanguages, t } = useLanguage();
+
+  const [internalView, setInternalView] = useState('clinical');
+  const dashboardView = activeTab === 'digital_twin' ? 'digital_twin' : internalView;
 
   const [activeFilter, setActiveFilter] = useState('upcoming');
   const [doctors, setDoctors] = useState([]);
@@ -35,20 +42,35 @@ export function PatientDashboard({ onOpenAiTriage, onOpenEmergency, onOpenVideoC
   const [approvalAlert, setApprovalAlert] = useState(null);
   const [notifications, setNotifications] = useState([]);
 
+  // Diagnostic Lab Orders & Precision Matcher State
+  const [patientLabOrders, setPatientLabOrders] = useState([]);
+  const [selectedLabForBooking, setSelectedLabForBooking] = useState(null);
+  const [labBookingModalOpen, setLabBookingModalOpen] = useState(false);
+  const [collectionType, setCollectionType] = useState('Home Collection');
+  const [collectionDate, setCollectionDate] = useState('Tomorrow, 08:30 AM');
+  const [patientAddress, setPatientAddress] = useState('Flat 402, Shanthi Residency, Indiranagar, Bengaluru');
+  const [patientPhone, setPatientPhone] = useState('+91 98765 43210');
+  const [isBookingLab, setIsBookingLab] = useState(false);
+  const [expandedLabOrderId, setExpandedLabOrderId] = useState(null);
+  const [labSuccessAlert, setLabSuccessAlert] = useState(null);
+
   useEffect(() => {
     loadDoctors();
     loadPatientData();
     loadPendingPrescriptions();
     loadNotifications();
+    loadPatientLabOrders();
 
     const interval = setInterval(() => {
       loadNotifications();
       loadPatientData();
       loadPendingPrescriptions();
+      loadPatientLabOrders();
     }, 2000);
 
     return () => clearInterval(interval);
   }, [currentLanguage, user]);
+
 
   const loadNotifications = async () => {
     const pId = user?.patientId || user?.id || 'p_01';
@@ -101,6 +123,59 @@ export function PatientDashboard({ onOpenAiTriage, onOpenEmergency, onOpenVideoC
       console.warn("Could not load pending prescriptions:", e);
     }
   };
+
+  const loadPatientLabOrders = async () => {
+    const pId = user?.patientId || user?.id || 'p_01';
+    try {
+      const res = await api.getPatientLabOrders(pId);
+      setPatientLabOrders(res || []);
+      if (res && res.length > 0 && !expandedLabOrderId) {
+        setExpandedLabOrderId(res[0].id);
+      }
+    } catch (e) {
+      console.warn("Could not load patient lab orders:", e);
+    }
+  };
+
+  const handleOpenLabBooking = (order, lab) => {
+    setSelectedLabForBooking({ order, lab });
+    setLabBookingModalOpen(true);
+  };
+
+  const handleConfirmLabSelection = async () => {
+    if (!selectedLabForBooking) return;
+    setIsBookingLab(true);
+    try {
+      const { order, lab } = selectedLabForBooking;
+      await api.selectLaboratory({
+        order_id: order.id,
+        lab_id: lab.lab_id,
+        collection_type: collectionType,
+        scheduled_date: collectionDate,
+        scheduled_time: "08:30 AM",
+        patient_address: patientAddress,
+        patient_phone: patientPhone
+      });
+
+      confetti({
+        particleCount: 80,
+        spread: 70,
+        origin: { y: 0.6 }
+      });
+
+      setLabBookingModalOpen(false);
+      setSelectedLabForBooking(null);
+      setLabSuccessAlert(`✓ Laboratory Selected! ${lab.lab_name} confirmed for sample collection. Diagnostic analyzer instrument precision report (${lab.precision_accuracy_index}% PAI) transmitted to your attending physician.`);
+      loadPatientLabOrders();
+      loadNotifications();
+      setTimeout(() => setLabSuccessAlert(null), 5500);
+    } catch (e) {
+      alert("Error confirming laboratory booking: " + e.message);
+    } finally {
+      setIsBookingLab(false);
+    }
+  };
+
 
   const handleVoiceInput = () => {
     if (!isSpeechRecognitionSupported()) {
@@ -235,7 +310,88 @@ export function PatientDashboard({ onOpenAiTriage, onOpenEmergency, onOpenVideoC
         </div>
       </div>
 
-      {/* Real-Time Doctor Prescription Approval Notification Alert */}
+      {/* Category View Switcher: Clinical Care Overview vs Patient Digital Twin */}
+      <div className="flex items-center gap-2 p-1.5 bg-slate-200/80 rounded-2xl w-fit shadow-xs">
+        <button
+          onClick={() => {
+            setInternalView('clinical');
+            if (setActiveTab) setActiveTab('home');
+          }}
+          className={`px-4 py-2 rounded-xl text-xs font-black transition flex items-center gap-2 cursor-pointer ${
+            dashboardView === 'clinical'
+              ? 'bg-white text-slate-900 shadow-sm'
+              : 'text-slate-600 hover:text-slate-900'
+          }`}
+        >
+          <Activity className="w-4 h-4 text-emerald-600" />
+          <span>Clinical Care & Overview</span>
+        </button>
+
+        <button
+          onClick={() => {
+            setInternalView('digital_twin');
+            if (setActiveTab) setActiveTab('digital_twin');
+          }}
+          className={`px-4 py-2 rounded-xl text-xs font-black transition flex items-center gap-2 cursor-pointer ${
+            dashboardView === 'digital_twin'
+              ? 'bg-brand-emerald text-white shadow-md'
+              : 'text-slate-700 hover:text-slate-900'
+          }`}
+        >
+          <span className="text-base leading-none">🧬</span>
+          <span>Patient Digital Twin</span>
+          <span className="px-2 py-0.5 rounded-full bg-emerald-500 text-white text-[9px] font-black uppercase tracking-wider animate-pulse">
+            LIVE
+          </span>
+        </button>
+      </div>
+
+      {dashboardView === 'digital_twin' ? (
+        <DigitalTwinDashboard
+          onBackToOverview={() => {
+            setInternalView('clinical');
+            if (setActiveTab) setActiveTab('home');
+          }}
+        />
+      ) : (
+        <>
+          {/* Digital Twin Quick Launch Hero Banner */}
+          <div 
+            onClick={() => {
+              setInternalView('digital_twin');
+              if (setActiveTab) setActiveTab('digital_twin');
+            }}
+            className="p-5 rounded-3xl bg-gradient-to-r from-slate-900 via-emerald-950 to-slate-900 text-white shadow-xl border border-emerald-800/40 cursor-pointer hover:border-emerald-500/60 hover:shadow-2xl transition-all group flex flex-col sm:flex-row sm:items-center justify-between gap-4"
+          >
+            <div className="flex items-start sm:items-center gap-3.5">
+              <div className="w-12 h-12 rounded-2xl bg-emerald-500/20 border border-emerald-400/30 flex items-center justify-center text-2xl flex-shrink-0 group-hover:scale-110 transition-transform">
+                🧬
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/25 text-emerald-300 text-[10px] font-black uppercase tracking-wider border border-emerald-400/30">
+                    Interactive In Silico Physiology
+                  </span>
+                  <span className="text-xs text-emerald-200 font-bold">Biometric Telemetry Simulation</span>
+                </div>
+                <h3 className="text-base sm:text-lg font-black text-white mt-1">
+                  Launch Patient Digital Twin
+                </h3>
+                <p className="text-xs text-emerald-100/80 mt-0.5 max-w-xl">
+                  Simulate live wearable vitals (HR, BP, SpO₂, Temp, RR, Glucose), inspect multi-organ stress, and explore prospective trajectory simulations.
+                </p>
+              </div>
+            </div>
+
+            <button
+              className="px-5 py-2.5 rounded-2xl bg-brand-emerald hover:bg-emerald-600 text-white text-xs font-black flex items-center gap-2 shadow-lg shadow-emerald-700/30 self-start sm:self-auto group-hover:translate-x-1 transition-all cursor-pointer"
+            >
+              <span>Explore Digital Twin</span>
+              <ArrowUpRight className="w-4 h-4" />
+            </button>
+          </div>
+
+          {/* Real-Time Doctor Prescription Approval Notification Alert */}
       {approvalAlert && (
         <div className="p-5 rounded-3xl bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 text-white shadow-2xl shadow-emerald-700/25 border-2 border-emerald-300 flex items-start justify-between gap-4 animate-in slide-in-from-top duration-300">
           <div className="flex items-start gap-4">
@@ -276,6 +432,38 @@ export function PatientDashboard({ onOpenAiTriage, onOpenEmergency, onOpenVideoC
               }
               setApprovalAlert(null);
             }}
+            className="p-2 rounded-full bg-white/15 hover:bg-white/30 text-white transition text-xs font-bold"
+            title="Dismiss notification"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
+      {/* Real-Time Laboratory Booking Confirmation Banner */}
+      {labSuccessAlert && (
+        <div className="p-5 rounded-3xl bg-gradient-to-r from-indigo-600 via-purple-600 to-indigo-700 text-white shadow-2xl shadow-indigo-700/25 border-2 border-indigo-300 flex items-start justify-between gap-4 animate-in slide-in-from-top duration-300">
+          <div className="flex items-start gap-4">
+            <div className="w-12 h-12 rounded-2xl bg-white/20 backdrop-blur-sm flex items-center justify-center text-white flex-shrink-0 shadow-inner">
+              <Microscope className="w-7 h-7 text-brand-mint" />
+            </div>
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <span className="px-2.5 py-0.5 rounded-full bg-white/25 text-[10px] font-black uppercase tracking-wider">
+                  🔬 Laboratory Precision Match Confirmed
+                </span>
+                <span className="text-[11px] font-semibold text-indigo-100">Live Status</span>
+              </div>
+              <h2 className="text-base sm:text-lg font-black tracking-tight">
+                {labSuccessAlert}
+              </h2>
+              <p className="text-xs text-indigo-100 font-medium">
+                Your sample collection details and analytical instrument specifications have been synchronized with your hospital EHR & attending physician.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => setLabSuccessAlert(null)}
             className="p-2 rounded-full bg-white/15 hover:bg-white/30 text-white transition text-xs font-bold"
             title="Dismiss notification"
           >
@@ -443,6 +631,12 @@ export function PatientDashboard({ onOpenAiTriage, onOpenEmergency, onOpenVideoC
         </div>
 
       </div>
+
+      {/* Prescribed Diagnostic Lab Tests & Precision Laboratory Matcher (Compact & Expandable Component) */}
+      <PrescribedLabTestsCard 
+        patientLabOrders={patientLabOrders} 
+        onOpenLabBooking={handleOpenLabBooking} 
+      />
 
       {/* Two Column Grid: Medical History & Readmission Risk Rate */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -830,6 +1024,281 @@ export function PatientDashboard({ onOpenAiTriage, onOpenEmergency, onOpenVideoC
 
           </div>
         </div>
+      )}
+
+      {/* Diagnostic Lab Booking Modal */}
+      {labBookingModalOpen && selectedLabForBooking && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
+          <div className="relative w-full max-w-xl bg-white rounded-3xl shadow-2xl border border-slate-100 overflow-hidden my-8 animate-in fade-in zoom-in duration-200">
+            
+            {/* Modal Header */}
+            <div className="p-6 bg-gradient-to-r from-indigo-900 via-indigo-850 to-slate-900 text-white relative">
+              <button 
+                onClick={() => setLabBookingModalOpen(false)}
+                className="absolute top-5 right-5 w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-white transition cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+
+              <div className="flex items-center gap-3 mb-2">
+                <div className="w-10 h-10 rounded-2xl bg-indigo-500/30 border border-indigo-400/40 flex items-center justify-center text-indigo-200">
+                  <Building2 className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-black uppercase tracking-wider text-indigo-300">
+                      Accredited Diagnostic Booking
+                    </span>
+                    <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-[10px] font-black border border-emerald-400/30">
+                      Ranked #{selectedLabForBooking.lab.rank} Precision
+                    </span>
+                  </div>
+                  <h3 className="text-xl font-black text-white">
+                    {selectedLabForBooking.lab.lab_name}
+                  </h3>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 mt-3 text-xs text-indigo-200">
+                <span className="flex items-center gap-1">
+                  <MapPin className="w-3.5 h-3.5 text-indigo-300" />
+                  <span>{selectedLabForBooking.lab.location}</span>
+                </span>
+                <span>•</span>
+                <span>Accreditations: <strong className="text-white">{selectedLabForBooking.lab.accreditations?.join(', ')}</strong></span>
+                <span>•</span>
+                <span>TAT: <strong className="text-emerald-300">{selectedLabForBooking.lab.turnaround_time}</strong></span>
+              </div>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-6 space-y-5 max-h-[70vh] overflow-y-auto">
+              
+              {/* Instrument & Precision Quality Callout */}
+              <div className="p-4 rounded-2xl bg-gradient-to-br from-indigo-50 via-slate-50 to-emerald-50 border border-indigo-100 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-black uppercase text-indigo-950 flex items-center gap-1.5">
+                    <Gauge className="w-4 h-4 text-indigo-600" />
+                    <span>Analytical Precision & Instrument Verification</span>
+                  </span>
+                  <span className="text-xs font-black px-2.5 py-1 rounded-full bg-indigo-600 text-white shadow-xs">
+                    {selectedLabForBooking.lab.precision_accuracy_index}% PAI
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3 text-xs">
+                  <div className="p-2.5 rounded-xl bg-white border border-slate-100 shadow-xs">
+                    <span className="text-slate-500 block text-[11px]">Repeatability CV%</span>
+                    <span className="font-extrabold text-emerald-700 text-sm">
+                      {selectedLabForBooking.lab.average_cv_percent}% CV
+                    </span>
+                    <span className="text-[10px] text-slate-400 block">Ultra-low analytical variance</span>
+                  </div>
+                  <div className="p-2.5 rounded-xl bg-white border border-slate-100 shadow-xs">
+                    <span className="text-slate-500 block text-[11px]">Accuracy Score</span>
+                    <span className="font-extrabold text-indigo-900 text-sm">
+                      {selectedLabForBooking.lab.average_accuracy_score}%
+                    </span>
+                    <span className="text-[10px] text-slate-400 block">Traceable Reference Standards</span>
+                  </div>
+                </div>
+
+                {/* Instrument Specifications */}
+                <div className="space-y-1.5 pt-1">
+                  <span className="text-[11px] font-bold text-slate-700 block">Instruments dedicated for your tests:</span>
+                  {selectedLabForBooking.lab.instruments?.map((inst, i) => (
+                    <div key={i} className="text-[11px] p-2 rounded-xl bg-white/80 border border-indigo-100/60 flex items-center justify-between">
+                      <div>
+                        <span className="font-black text-slate-900">{inst.instrument_name}</span>
+                        <span className="text-slate-500 ml-1.5">({inst.company_name} • {inst.technology_type})</span>
+                      </div>
+                      <span className="font-mono text-[10px] font-bold text-indigo-700">
+                        CV: {inst.precision_cv_percent}%
+                      </span>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="text-[11px] text-indigo-900 font-medium bg-indigo-100/50 p-2 rounded-xl flex items-center gap-2">
+                  <Award className="w-4 h-4 text-indigo-700 flex-shrink-0" />
+                  <span>
+                    Report precision & analytical equipment data will be synchronized to Dr. {selectedLabForBooking.order.doctor_name} and hospital records.
+                  </span>
+                </div>
+              </div>
+
+              {/* Sample Collection Mode */}
+              <div>
+                <label className="text-xs font-black text-slate-800 uppercase tracking-wider block mb-2">
+                  Select Collection Mode
+                </label>
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setCollectionType('Home Collection')}
+                    className={`p-3.5 rounded-2xl border text-left transition cursor-pointer flex flex-col justify-between ${
+                      collectionType === 'Home Collection'
+                        ? 'border-indigo-600 bg-indigo-50/50 ring-2 ring-indigo-600/20'
+                        : 'border-slate-200 bg-white hover:border-slate-300'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between mb-1.5">
+                      <span className="text-lg">🏠</span>
+                      {collectionType === 'Home Collection' && (
+                        <CheckCircle2 className="w-4 h-4 text-indigo-600" />
+                      )}
+                    </div>
+                    <div>
+                      <span className="text-xs font-extrabold text-slate-900 block">Home Sample Collection</span>
+                      <span className="text-[11px] text-emerald-700 font-bold">Doorstep Phlebotomist (Free)</span>
+                    </div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setCollectionType('Center Visit')}
+                    className={`p-3.5 rounded-2xl border text-left transition cursor-pointer flex flex-col justify-between ${
+                      collectionType === 'Center Visit'
+                        ? 'border-indigo-600 bg-indigo-50/50 ring-2 ring-indigo-600/20'
+                        : 'border-slate-200 bg-white hover:border-slate-300'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between mb-1.5">
+                      <span className="text-lg">🏥</span>
+                      {collectionType === 'Center Visit' && (
+                        <CheckCircle2 className="w-4 h-4 text-indigo-600" />
+                      )}
+                    </div>
+                    <div>
+                      <span className="text-xs font-extrabold text-slate-900 block">Diagnostic Center Visit</span>
+                      <span className="text-[11px] text-slate-500 font-medium">Walk-in with e-Slip</span>
+                    </div>
+                  </button>
+                </div>
+              </div>
+
+              {/* Date & Time Selection */}
+              <div>
+                <label className="text-xs font-black text-slate-800 uppercase tracking-wider block mb-2">
+                  Sample Collection Slot
+                </label>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                  {[
+                    "Tomorrow, 07:30 AM",
+                    "Tomorrow, 08:30 AM",
+                    "Tomorrow, 10:00 AM",
+                    "Tomorrow, 11:30 AM",
+                    "Day After, 08:00 AM",
+                    "Day After, 09:30 AM"
+                  ].map((slot) => (
+                    <button
+                      key={slot}
+                      type="button"
+                      onClick={() => setCollectionDate(slot)}
+                      className={`px-3 py-2 rounded-xl text-xs font-bold text-center transition cursor-pointer ${
+                        collectionDate === slot
+                          ? 'bg-slate-900 text-white shadow-xs'
+                          : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+                      }`}
+                    >
+                      {slot}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Address and Phone */}
+              {collectionType === 'Home Collection' && (
+                <div className="space-y-3">
+                  <div>
+                    <label className="text-xs font-bold text-slate-700 block mb-1">
+                      Sample Pickup Address
+                    </label>
+                    <input
+                      type="text"
+                      value={patientAddress}
+                      onChange={(e) => setPatientAddress(e.target.value)}
+                      placeholder="Enter full home address..."
+                      className="w-full text-xs p-3 rounded-xl border border-slate-200 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-bold text-slate-700 block mb-1">
+                      Contact Phone for Phlebotomist
+                    </label>
+                    <input
+                      type="text"
+                      value={patientPhone}
+                      onChange={(e) => setPatientPhone(e.target.value)}
+                      placeholder="+91 98765 43210"
+                      className="w-full text-xs p-3 rounded-xl border border-slate-200 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Fasting Guideline Notice */}
+              <div className="p-3 bg-amber-50 rounded-xl border border-amber-200 text-xs text-amber-900 flex items-start gap-2">
+                <Clock className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
+                <p className="text-[11px] leading-relaxed">
+                  <strong>Fasting Instruction:</strong> For Blood Sugar, HbA1c, and Lipid Profile tests, 8-10 hours overnight fasting is advised. You may drink plain water.
+                </p>
+              </div>
+
+              {/* Price Summary */}
+              <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 flex items-center justify-between">
+                <div>
+                  <span className="text-xs font-extrabold text-slate-900 block">Total Diagnostic Package</span>
+                  <span className="text-[11px] text-slate-500">
+                    {selectedLabForBooking.order.lab_tests?.length} tests • Phlebotomy Waived
+                  </span>
+                </div>
+                <div className="text-right">
+                  <span className="text-lg font-black text-slate-900">
+                    ₹{selectedLabForBooking.lab.estimated_price_inr}
+                  </span>
+                  <span className="text-[10px] text-emerald-700 block font-bold">Pay at Collection / Online</span>
+                </div>
+              </div>
+
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-5 bg-slate-50 border-t border-slate-100 flex items-center justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setLabBookingModalOpen(false)}
+                className="px-5 py-2.5 rounded-xl text-slate-600 hover:bg-slate-200 font-bold text-xs transition cursor-pointer"
+              >
+                Cancel
+              </button>
+
+              <button
+                type="button"
+                onClick={handleConfirmLabSelection}
+                disabled={isBookingLab}
+                className="px-6 py-2.5 rounded-xl bg-brand-emerald hover:bg-emerald-700 active:scale-95 text-white font-black text-xs flex items-center gap-2 shadow-lg shadow-brand-emerald/30 transition disabled:opacity-60 cursor-pointer"
+              >
+                {isBookingLab ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    <span>Transmitting Order & Quality Data...</span>
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle2 className="w-4 h-4" />
+                    <span>Confirm Booking & Transmit Quality Metrics</span>
+                  </>
+                )}
+              </button>
+            </div>
+
+          </div>
+        </div>
+      )}
+
+        </>
       )}
 
     </div>

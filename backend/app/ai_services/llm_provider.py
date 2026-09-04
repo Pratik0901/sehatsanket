@@ -14,9 +14,11 @@ class LLMProvider:
         self.groq_key = settings.GROQ_API_KEY
         self.sarvam_key = settings.SARVAM_API_KEY
         self.models_priority = [
+            "groq/compound-mini",
             "openai/gpt-oss-120b",
             "openai/gpt-oss-20b",
-            "qwen/qwen3.8-27b"
+            "qwen/qwen3.6-27b",
+            "groq/compound"
         ]
 
     async def generate_response(self, system_prompt: str, user_prompt: str, temperature: float = 0.2) -> Optional[str]:

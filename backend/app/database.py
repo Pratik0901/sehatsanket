@@ -545,6 +545,78 @@ class Database:
 
         self.triage_sessions: Dict[str, Dict[str, Any]] = {}
 
+        self.lab_orders: Dict[str, Dict[str, Any]] = {
+            "lab_ord_01": {
+                "id": "lab_ord_01",
+                "consultation_id": "consult_01",
+                "patient_id": "p_01",
+                "patient_name": "Priya Sharma",
+                "doctor_id": "doc_05",
+                "doctor_name": "Dr. Rajesh Rao",
+                "tests": [
+                    {
+                        "id": "t_cbc",
+                        "name": "Complete Blood Count (CBC with 5-Part Differential)",
+                        "category": "Hematology",
+                        "clinical_significance": "Post-op wound healing & systemic infection screen"
+                    },
+                    {
+                        "id": "t_lft",
+                        "name": "Liver Function Test (LFT)",
+                        "category": "Hepatic Panel",
+                        "clinical_significance": "Post-appendectomy metabolic recovery & drug clearance"
+                    }
+                ],
+                "medications": [
+                    {"name": "Cefixime 200mg", "dosage": "1 tablet", "frequency": "Twice daily", "instructions": "Post-op prophylactic antibiotic"}
+                ],
+                "remedies": ["Warm hydration (2.5L daily)", "Keep surgical incision clean & dry"],
+                "clinical_notes": "Patient recovering well on post-op day 6. Incision sutures intact. Check CBC and LFT to confirm absence of occult inflammatory response before suture removal.",
+                "status": "pending_patient_selection",
+                "created_at": "2026-09-04 11:30",
+                "updated_at": "2026-09-04 11:30"
+            }
+        }
+
+        self.consultation_feedback: Dict[str, Dict[str, Any]] = {
+            "fb_01": {
+                "id": "fb_01",
+                "consultation_id": "consult_01",
+                "patient_id": "p_01",
+                "patient_name": "Priya Sharma",
+                "doctor_id": "doc_05",
+                "doctor_name": "Dr. Rajesh Rao",
+                "rating": 5,
+                "tags": ["Clear Explanation", "Friendly & Patient", "Bilingual Translation Helped"],
+                "feedback_text": "ಡಾಕ್ಟರ್ ತುಂಬಾ ತಾಳ್ಮೆಯಿಂದ ಕೇಳಿಸಿಕೊಂಡರು ಮತ್ತು ಸರಿಯಾದ ಔಷಧಿ ಹಾಗೂ ಲ್ಯಾಬ್ ಪರೀಕ್ಷೆಗಳನ್ನು ವಿವರಿಸಿದರು.",
+                "language": "kn",
+                "translated_text": "The doctor listened very patiently and clearly explained the appropriate medications and diagnostic lab tests.",
+                "sentiment": "Positive",
+                "sentiment_score": 0.98,
+                "voice_input_used": True,
+                "skipped": False,
+                "created_at": "2026-09-04 14:15"
+            },
+            "fb_02": {
+                "id": "fb_02",
+                "consultation_id": "consult_02",
+                "patient_id": "p_02",
+                "patient_name": "Ramesh Kumar",
+                "doctor_id": "doc_01",
+                "doctor_name": "Dr. Ching Ming Yang",
+                "rating": 5,
+                "tags": ["Accurate Diagnosis", "Friendly & Patient", "Clear Explanation"],
+                "feedback_text": "डॉक्टर साहब ने हृदय स्वास्थ्य और ईसीजी रिपोर्ट की विस्तृत जानकारी दी। बहुत अच्छा अनुभव रहा।",
+                "language": "hi",
+                "translated_text": "The doctor provided detailed information regarding heart health and the ECG report. It was a very good experience.",
+                "sentiment": "Positive",
+                "sentiment_score": 0.96,
+                "voice_input_used": False,
+                "skipped": False,
+                "created_at": "2026-09-03 16:45"
+            }
+        }
+
         # Synchronize live state from Neon PostgreSQL
         self.load_from_postgres()
 
@@ -688,6 +760,75 @@ class Database:
                 if rows:
                     for r in rows:
                         self.triage_sessions[r[0]] = r[1]
+
+                # 12. lab_orders
+                cur.execute("""
+                CREATE TABLE IF NOT EXISTS lab_orders (
+                    id VARCHAR(64) PRIMARY KEY,
+                    consultation_id VARCHAR(64),
+                    patient_id VARCHAR(64) NOT NULL,
+                    patient_name VARCHAR(128) NOT NULL,
+                    doctor_id VARCHAR(64) NOT NULL,
+                    doctor_name VARCHAR(128) NOT NULL,
+                    tests JSONB DEFAULT '[]'::jsonb,
+                    medications JSONB DEFAULT '[]'::jsonb,
+                    remedies JSONB DEFAULT '[]'::jsonb,
+                    clinical_notes TEXT,
+                    status VARCHAR(64) DEFAULT 'pending_patient_selection',
+                    selected_lab JSONB,
+                    instrument_details JSONB,
+                    precision_accuracy_report JSONB,
+                    booking_details JSONB,
+                    created_at VARCHAR(64),
+                    updated_at VARCHAR(64)
+                );
+                """)
+                cur.execute("SELECT id, consultation_id, patient_id, patient_name, doctor_id, doctor_name, tests, medications, remedies, clinical_notes, status, selected_lab, instrument_details, precision_accuracy_report, booking_details, created_at, updated_at FROM lab_orders;")
+                rows = cur.fetchall()
+                if rows:
+                    for r in rows:
+                        self.lab_orders[r[0]] = {
+                            "id": r[0], "consultation_id": r[1], "patient_id": r[2], "patient_name": r[3],
+                            "doctor_id": r[4], "doctor_name": r[5], "tests": r[6] or [],
+                            "medications": r[7] or [], "remedies": r[8] or [], "clinical_notes": r[9],
+                            "status": r[10] or "pending_patient_selection",
+                            "selected_lab": r[11], "instrument_details": r[12],
+                            "precision_accuracy_report": r[13], "booking_details": r[14],
+                            "created_at": r[15], "updated_at": r[16]
+                        }
+
+                # 13. consultation_feedback
+                cur.execute("""
+                CREATE TABLE IF NOT EXISTS consultation_feedback (
+                    id VARCHAR(64) PRIMARY KEY,
+                    consultation_id VARCHAR(64),
+                    patient_id VARCHAR(64) NOT NULL,
+                    patient_name VARCHAR(128) NOT NULL,
+                    doctor_id VARCHAR(64) NOT NULL,
+                    doctor_name VARCHAR(128) NOT NULL,
+                    rating INT DEFAULT 5,
+                    tags JSONB DEFAULT '[]'::jsonb,
+                    feedback_text TEXT,
+                    language VARCHAR(16) DEFAULT 'en',
+                    translated_text TEXT,
+                    sentiment VARCHAR(32) DEFAULT 'Positive',
+                    sentiment_score FLOAT DEFAULT 0.95,
+                    voice_input_used BOOLEAN DEFAULT FALSE,
+                    skipped BOOLEAN DEFAULT FALSE,
+                    created_at VARCHAR(64)
+                );
+                """)
+                cur.execute("SELECT id, consultation_id, patient_id, patient_name, doctor_id, doctor_name, rating, tags, feedback_text, language, translated_text, sentiment, sentiment_score, voice_input_used, skipped, created_at FROM consultation_feedback;")
+                rows = cur.fetchall()
+                if rows:
+                    for r in rows:
+                        self.consultation_feedback[r[0]] = {
+                            "id": r[0], "consultation_id": r[1], "patient_id": r[2], "patient_name": r[3],
+                            "doctor_id": r[4], "doctor_name": r[5], "rating": r[6], "tags": r[7] or [],
+                            "feedback_text": r[8] or "", "language": r[9] or "en", "translated_text": r[10] or "",
+                            "sentiment": r[11] or "Positive", "sentiment_score": r[12] or 0.95,
+                            "voice_input_used": bool(r[13]), "skipped": bool(r[14]), "created_at": r[15]
+                        }
 
             print("Loaded live clinical records from Neon PostgreSQL successfully.")
         except Exception as err:
@@ -892,4 +1033,111 @@ class Database:
         finally:
             conn.close()
 
+    def save_doctor(self, d: Dict[str, Any]):
+        self.doctors[d["id"]] = d
+        conn = self._get_connection()
+        if not conn: return
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""
+                INSERT INTO doctors (id, name, specialization, experience_years, rating, spoken_languages, clinic_address, session_fee, avatar_url, is_available, available_slots, assigned_patient_ids)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (id) DO UPDATE SET
+                    name = EXCLUDED.name,
+                    specialization = EXCLUDED.specialization,
+                    experience_years = EXCLUDED.experience_years,
+                    rating = EXCLUDED.rating,
+                    spoken_languages = EXCLUDED.spoken_languages,
+                    clinic_address = EXCLUDED.clinic_address,
+                    session_fee = EXCLUDED.session_fee,
+                    avatar_url = EXCLUDED.avatar_url,
+                    is_available = EXCLUDED.is_available,
+                    available_slots = EXCLUDED.available_slots,
+                    assigned_patient_ids = EXCLUDED.assigned_patient_ids;
+                """, (
+                    d["id"], d["name"], d.get("specialization", ""), d.get("experience_years", 0),
+                    d.get("rating", 5.0), Json(d.get("spoken_languages", [])),
+                    d.get("clinic_address", ""), d.get("session_fee", 0),
+                    d.get("avatar_url", ""), d.get("is_available", True),
+                    Json(d.get("available_slots", [])), Json(d.get("assigned_patient_ids", []))
+                ))
+        except Exception as e:
+            print("Error persisting doctor to PostgreSQL:", e)
+        finally:
+            conn.close()
+
+    def save_lab_order(self, o: Dict[str, Any]):
+        self.lab_orders[o["id"]] = o
+        conn = self._get_connection()
+        if not conn: return
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""
+                INSERT INTO lab_orders (id, consultation_id, patient_id, patient_name, doctor_id, doctor_name, tests, medications, remedies, clinical_notes, status, selected_lab, instrument_details, precision_accuracy_report, booking_details, created_at, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (id) DO UPDATE SET
+                    consultation_id = EXCLUDED.consultation_id,
+                    patient_id = EXCLUDED.patient_id,
+                    patient_name = EXCLUDED.patient_name,
+                    doctor_id = EXCLUDED.doctor_id,
+                    doctor_name = EXCLUDED.doctor_name,
+                    tests = EXCLUDED.tests,
+                    medications = EXCLUDED.medications,
+                    remedies = EXCLUDED.remedies,
+                    clinical_notes = EXCLUDED.clinical_notes,
+                    status = EXCLUDED.status,
+                    selected_lab = EXCLUDED.selected_lab,
+                    instrument_details = EXCLUDED.instrument_details,
+                    precision_accuracy_report = EXCLUDED.precision_accuracy_report,
+                    booking_details = EXCLUDED.booking_details,
+                    updated_at = EXCLUDED.updated_at;
+                """, (
+                    o["id"], o.get("consultation_id"), o["patient_id"], o["patient_name"],
+                    o["doctor_id"], o["doctor_name"], Json(o.get("tests", [])),
+                    Json(o.get("medications", [])), Json(o.get("remedies", [])),
+                    o.get("clinical_notes"), o.get("status", "pending_patient_selection"),
+                    Json(o.get("selected_lab")) if o.get("selected_lab") else None,
+                    Json(o.get("instrument_details")) if o.get("instrument_details") else None,
+                    Json(o.get("precision_accuracy_report")) if o.get("precision_accuracy_report") else None,
+                    Json(o.get("booking_details")) if o.get("booking_details") else None,
+                    o.get("created_at"), o.get("updated_at")
+                ))
+        except Exception as e:
+            print("Error persisting lab_order to PostgreSQL:", e)
+        finally:
+            conn.close()
+
+    def save_consultation_feedback(self, f: Dict[str, Any]):
+        self.consultation_feedback[f["id"]] = f
+        conn = self._get_connection()
+        if not conn: return
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""
+                INSERT INTO consultation_feedback (id, consultation_id, patient_id, patient_name, doctor_id, doctor_name, rating, tags, feedback_text, language, translated_text, sentiment, sentiment_score, voice_input_used, skipped, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (id) DO UPDATE SET
+                    rating = EXCLUDED.rating,
+                    tags = EXCLUDED.tags,
+                    feedback_text = EXCLUDED.feedback_text,
+                    language = EXCLUDED.language,
+                    translated_text = EXCLUDED.translated_text,
+                    sentiment = EXCLUDED.sentiment,
+                    sentiment_score = EXCLUDED.sentiment_score,
+                    voice_input_used = EXCLUDED.voice_input_used,
+                    skipped = EXCLUDED.skipped;
+                """, (
+                    f["id"], f.get("consultation_id"), f.get("patient_id"), f.get("patient_name"),
+                    f.get("doctor_id"), f.get("doctor_name"), f.get("rating", 5),
+                    Json(f.get("tags", [])), f.get("feedback_text", ""), f.get("language", "en"),
+                    f.get("translated_text", ""), f.get("sentiment", "Positive"),
+                    f.get("sentiment_score", 0.95), f.get("voice_input_used", False),
+                    f.get("skipped", False), f.get("created_at")
+                ))
+        except Exception as e:
+            print("Error persisting consultation_feedback to PostgreSQL:", e)
+        finally:
+            conn.close()
+
 db = Database()
+

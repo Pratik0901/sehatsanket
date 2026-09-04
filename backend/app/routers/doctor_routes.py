@@ -124,7 +124,10 @@ def get_doctor_schedule(doctor_id: str):
             slots.append({
                 "id": slot_id,
                 "time": apt.get("time", "10:00 AM"),
+                "date": apt.get("date", "Today"),
                 "patient": f"{apt.get('patient_name')} ({apt.get('symptoms') or 'Clinical Consult'})",
+                "patient_name": apt.get("patient_name"),
+                "symptoms": apt.get("symptoms", ""),
                 "status": "Booked",
                 "lang": apt.get("language_pair"),
                 "doctor_name": apt.get("doctor_name"),
@@ -164,7 +167,10 @@ def get_doctor_schedule(doctor_id: str):
             slots.append({
                 "id": slot_id,
                 "time": t_str,
+                "date": apt.get("date", "Today"),
                 "patient": f"{apt.get('patient_name')} ({apt.get('symptoms') or 'Clinical Consult'})",
+                "patient_name": apt.get("patient_name"),
+                "symptoms": apt.get("symptoms", ""),
                 "status": "Booked",
                 "lang": apt.get("language_pair"),
                 "doctor_name": doc["name"],
@@ -174,7 +180,10 @@ def get_doctor_schedule(doctor_id: str):
             slots.append({
                 "id": slot_id,
                 "time": t_str,
+                "date": "Today",
                 "patient": "Available Slot",
+                "patient_name": None,
+                "symptoms": None,
                 "status": "Open",
                 "lang": None,
                 "doctor_name": doc["name"],
@@ -188,7 +197,10 @@ def get_doctor_schedule(doctor_id: str):
             slots.append({
                 "id": slot_id,
                 "time": a.get("time", "Custom Time"),
+                "date": a.get("date", "Today"),
                 "patient": f"{a.get('patient_name')} ({a.get('symptoms') or 'Clinical Consult'})",
+                "patient_name": a.get("patient_name"),
+                "symptoms": a.get("symptoms", ""),
                 "status": "Booked",
                 "lang": a.get("language_pair"),
                 "doctor_name": doc["name"],
@@ -201,6 +213,15 @@ def get_doctor_schedule(doctor_id: str):
         "doctor_name": doc["name"],
         "schedule": slots
     }
+
+@router.post("/appointments/{appointment_id}/cancel")
+def cancel_appointment(appointment_id: str):
+    if appointment_id in db.appointments:
+        apt = db.appointments[appointment_id]
+        apt["status"] = "Cancelled"
+        db.save_appointment(apt)
+        return {"status": "success", "message": "Appointment cancelled successfully"}
+    return {"status": "not_found", "message": "Appointment not found"}
 
 @router.get("/prescriptions/pending")
 def get_pending_prescriptions(doctor_id: Optional[str] = None):

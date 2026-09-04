@@ -205,3 +205,101 @@ class ReminderCreateRequest(BaseModel):
 
 class ReminderActionRequest(BaseModel):
     action: str  # 'take' | 'snooze'
+
+# --- Lab Tests & Instrument Precision Models ---
+class LabTestCatalogItem(BaseModel):
+    id: str
+    name: str
+    code: str
+    category: str
+    sample_type: str
+    fasting_required: bool
+    turnaround_time: str
+    description: str
+    clinical_significance: str
+    normal_range: str
+
+class LabInstrumentInfo(BaseModel):
+    instrument_name: str
+    company_name: str
+    origin_country: str
+    technology_type: str
+    precision_cv_percent: float
+    precision_score: float
+    accuracy_score: float
+    analytical_sensitivity: str
+    reference_standard: str
+    clinical_impact: str
+
+class LaboratoryRecommendation(BaseModel):
+    lab_id: str
+    lab_name: str
+    accreditations: List[str]
+    precision_accuracy_index: float
+    rank: int
+    instruments: List[Dict[str, Any]]
+    average_cv_percent: float
+    average_precision_score: float
+    average_accuracy_score: float
+    estimated_price_inr: int
+    turnaround_time: str
+    home_collection_available: bool
+    rating: float
+    location: str
+    clinical_precision_rating: str
+    why_recommended: str
+
+class PostConsultationOrderRequest(BaseModel):
+    consultation_id: Optional[str] = None
+    patient_id: str
+    doctor_id: str
+    doctor_name: str
+    medications: List[Dict[str, Any]] = []
+    remedies: Optional[List[str]] = []
+    clinical_notes: Optional[str] = ""
+    lab_tests: List[Dict[str, Any]] = []
+
+class LabSelectionRequest(BaseModel):
+    order_id: str
+    lab_id: str
+    collection_type: str = "Home Collection"  # 'Home Collection' | 'Center Visit'
+    scheduled_date: str
+    scheduled_time: str
+    patient_address: Optional[str] = ""
+    patient_phone: Optional[str] = ""
+
+# --- Consultation Feedback Models ---
+class ConsultationFeedbackRequest(BaseModel):
+    consultation_id: Optional[str] = "consult_01"
+    patient_id: str = "p_01"
+    patient_name: str = "Priya Sharma"
+    doctor_id: str = "doc_05"
+    doctor_name: str = "Dr. Rajesh Rao"
+    rating: int = 5  # 1 to 5
+    tags: Optional[List[str]] = []
+    feedback_text: Optional[str] = ""
+    language: Optional[str] = "en"  # 'kn', 'hi', 'en', 'ta', 'te', 'mr', 'bn', etc.
+    language_code: Optional[str] = None
+    voice_input_used: Optional[bool] = False
+    is_voice: Optional[bool] = None
+    skipped: bool = False
+
+class ConsultationFeedbackItem(BaseModel):
+    id: str
+    consultation_id: str
+    patient_id: str
+    patient_name: str
+    doctor_id: str
+    doctor_name: str
+    rating: int
+    tags: List[str] = []
+    feedback_text: str
+    language: str
+    translated_text: Optional[str] = ""
+    sentiment: str = "Positive"  # 'Positive' | 'Neutral' | 'Needs Attention'
+    sentiment_score: float = 0.95
+    voice_input_used: bool = False
+    skipped: bool = False
+    created_at: str
+
+

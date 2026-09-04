@@ -1,10 +1,12 @@
 import json
+import uuid
 from datetime import datetime
 from typing import Dict, Any, List, Optional
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException
 from pydantic import BaseModel
 from app.ai_services.translation import translation_service
 from app.database import db
+from app.models import ConsultationFeedbackRequest
 
 router = APIRouter(prefix="/consultation", tags=["Video Consultation"])
 
@@ -193,28 +195,33 @@ async def post_consultation_message(consultation_id: str, msg: VideoChatMessage)
         }
         db.consultations[consultation_id] = session
 
+    src_lang = msg.source_language
+    tgt_lang = msg.target_language
+    if src_lang == tgt_lang:
+        tgt_lang = "hi" if src_lang == "en" else "en"
+
     # 1. Translation
     sarvam_translation = await translation_service.translate_with_sarvam(
         text=msg.text,
-        target_lang=msg.target_language,
-        source_lang=msg.source_language
+        target_lang=tgt_lang,
+        source_lang=src_lang
     )
     
     translated_text = sarvam_translation or translation_service.translate_text(
         text=msg.text,
-        target_lang=msg.target_language,
-        source_lang=msg.source_language
+        target_lang=tgt_lang,
+        source_lang=src_lang
     )
 
     # 2. Native speech audio
-    audio_b64 = await translation_service.generate_sarvam_speech(translated_text, msg.target_language)
+    audio_b64 = await translation_service.generate_sarvam_speech(translated_text, tgt_lang)
 
     entry = {
         "speaker": msg.sender_role.capitalize(),
         "original_text": msg.text,
         "translated_text": translated_text,
-        "source_language": msg.source_language,
-        "target_language": msg.target_language,
+        "source_language": src_lang,
+        "target_language": tgt_lang,
         "audio_base64": audio_b64,
         "translation_engine": "Sarvam AI (Indian Languages)",
         "time": datetime.now().strftime("%H:%M:%S")
@@ -255,6 +262,8 @@ async def websocket_global_signaling(websocket: WebSocket):
                 if cid:
                     active_calls.pop(cid, None)
                 await manager.broadcast_global(payload)
+            elif msg_type == "LANGUAGE_UPDATE":
+                await manager.broadcast_global(payload)
             elif msg_type == "PING":
                 await websocket.send_json({"type": "PONG"})
     except WebSocketDisconnect:
@@ -273,7 +282,7 @@ async def websocket_consultation_stream(websocket: WebSocket, consultation_id: s
             msg_type = payload.get("type", "chat")
 
             # 1. WebRTC Signaling and Call State Relaying
-            if msg_type in ["WEBRTC_OFFER", "WEBRTC_ANSWER", "WEBRTC_ICE_CANDIDATE", "PEER_JOINED", "PEER_READY", "CALL_ENDED", "CALL_DECLINED", "PING"]:
+            if msg_type in ["WEBRTC_OFFER", "WEBRTC_ANSWER", "WEBRTC_ICE_CANDIDATE", "PEER_JOINED", "PEER_READY", "CALL_ENDED", "CALL_DECLINED", "SPEECH_ACTIVITY", "LANGUAGE_UPDATE", "PING"]:
                 if msg_type == "PING":
                     await websocket.send_json({"type": "PONG"})
                     continue
@@ -322,10 +331,11 @@ async def websocket_consultation_stream(websocket: WebSocket, consultation_id: s
             role = payload.get("sender_role", "participant")
             speaker = payload.get("speaker") or role.capitalize()
 
-            translated = text
-            if src_lang != tgt_lang:
-                sarvam_trans = await translation_service.translate_with_sarvam(text, tgt_lang, src_lang)
-                translated = sarvam_trans or translation_service.translate_text(text, tgt_lang, src_lang)
+            if src_lang == tgt_lang:
+                tgt_lang = "hi" if src_lang == "en" else "en"
+
+            sarvam_trans = await translation_service.translate_with_sarvam(text, tgt_lang, src_lang)
+            translated = sarvam_trans or translation_service.translate_text(text, tgt_lang, src_lang) or text
 
             audio_b64 = await translation_service.generate_sarvam_speech(translated, tgt_lang)
 
@@ -383,3 +393,151 @@ async def websocket_consultation_stream(websocket: WebSocket, consultation_id: s
         manager.disconnect(consultation_id, websocket)
     except Exception as e:
         manager.disconnect(consultation_id, websocket)
+
+
+# --- Multilingual Consultation Feedback Endpoints ---
+
+@router.post("/feedback")
+async def submit_consultation_feedback(req: ConsultationFeedbackRequest):
+    """
+    Records patient consultation feedback in any language through voice or text,
+    or handles skipped feedback submissions. Performs automatic AI translation
+    into English and calculates sentiment analysis.
+    """
+    feedback_id = f"fb_{uuid.uuid4().hex[:8]}"
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    # If skipped by patient
+    src_lang = req.language_code or req.language or "en"
+    is_voice = req.is_voice if req.is_voice is not None else bool(req.voice_input_used)
+
+    if req.skipped:
+        fb_item = {
+            "id": feedback_id,
+            "consultation_id": req.consultation_id or "consult_01",
+            "patient_id": req.patient_id,
+            "patient_name": req.patient_name,
+            "doctor_id": req.doctor_id,
+            "doctor_name": req.doctor_name,
+            "rating": req.rating or 5,
+            "tags": [],
+            "feedback_text": "",
+            "language": src_lang,
+            "language_code": src_lang,
+            "translated_text": "",
+            "english_translation": "",
+            "sentiment": "Neutral",
+            "sentiment_score": 0.5,
+            "voice_input_used": False,
+            "is_voice": False,
+            "skipped": True,
+            "created_at": now_str
+        }
+        db.save_consultation_feedback(fb_item)
+        return {
+            "status": "success",
+            "message": "Feedback skipped. Thank you!",
+            "feedback": fb_item,
+            "doctor_rating": db.doctors.get(req.doctor_id, {}).get("rating", 5.0)
+        }
+
+    raw_text = (req.feedback_text or "").strip()
+    translated_text = raw_text
+
+    # Auto-translate to English if submitted in another language or Romanized Indic
+    if raw_text:
+        try:
+            sarvam_trans = await translation_service.translate_with_sarvam(raw_text, target_lang="en", source_lang=src_lang)
+            if sarvam_trans and sarvam_trans.strip():
+                translated_text = sarvam_trans.strip()
+            else:
+                translated_text = translation_service.translate_text(raw_text, target_lang="en", source_lang=src_lang)
+        except Exception as e:
+            print(f"Translation error in feedback: {e}")
+            translated_text = translation_service.translate_text(raw_text, target_lang="en", source_lang=src_lang)
+
+    # Sentiment Analysis
+    rating = max(1, min(5, req.rating or 5))
+    sentiment = "Positive"
+    sentiment_score = 0.95
+
+    # Keyword check for negative indicators
+    lower_text = (translated_text + " " + raw_text).lower()
+    negative_words = ["delay", "rude", "poor", "bad", "unhelpful", "dissatisfied", "worst", "terrible", "ಕಳಪೆ", "ಖರಾಬ್", "खराब", "गलत"]
+    positive_words = ["great", "excellent", "kind", "helpful", "good", "patient", "best", "ಧನ್ಯವಾದ", "ಉತ್ತಮ", "ಒಳ್ಳೆಯದು", "ತುಂಬಾ", "धन्यवाद", "अच्छा", "शानदार"]
+
+    if any(w in lower_text for w in negative_words) or rating <= 2:
+        sentiment = "Needs Attention"
+        sentiment_score = round(0.20 + (rating * 0.1), 2)
+    elif rating == 3 or (not any(w in lower_text for w in positive_words) and rating < 4):
+        sentiment = "Neutral"
+        sentiment_score = 0.65
+    else:
+        sentiment = "Positive"
+        sentiment_score = round(0.85 + (rating - 3) * 0.07, 2)
+
+    fb_item = {
+        "id": feedback_id,
+        "consultation_id": req.consultation_id or "consult_01",
+        "patient_id": req.patient_id,
+        "patient_name": req.patient_name,
+        "doctor_id": req.doctor_id,
+        "doctor_name": req.doctor_name,
+        "rating": rating,
+        "tags": req.tags or [],
+        "feedback_text": raw_text,
+        "language": src_lang,
+        "language_code": src_lang,
+        "translated_text": translated_text,
+        "english_translation": translated_text,
+        "sentiment": sentiment,
+        "sentiment_score": sentiment_score,
+        "voice_input_used": is_voice,
+        "is_voice": is_voice,
+        "skipped": False,
+        "created_at": now_str
+    }
+
+    db.save_consultation_feedback(fb_item)
+
+    # Update Doctor's dynamic rating average
+    if req.doctor_id in db.doctors:
+        doc = db.doctors[req.doctor_id]
+        doc_feedbacks = [f for f in db.consultation_feedback.values() if f.get("doctor_id") == req.doctor_id and not f.get("skipped")]
+        if doc_feedbacks:
+            avg_rating = round(sum(f["rating"] for f in doc_feedbacks) / len(doc_feedbacks), 1)
+            doc["rating"] = avg_rating
+            db.save_doctor(doc)
+
+    return {
+        "status": "success",
+        "message": "Thank you for your valuable feedback! Your response has been recorded.",
+        "feedback": fb_item,
+        "doctor_rating": db.doctors.get(req.doctor_id, {}).get("rating", rating)
+    }
+
+
+@router.get("/feedback/doctor/{doctor_id}")
+def get_doctor_consultation_feedback(doctor_id: str):
+    """Retrieves all feedback and reviews given to a specific doctor."""
+    feedbacks = [f for f in db.consultation_feedback.values() if f.get("doctor_id") == doctor_id and not f.get("skipped")]
+    feedbacks.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+    avg_rating = round(sum(f["rating"] for f in feedbacks) / len(feedbacks), 1) if feedbacks else 5.0
+    return {
+        "doctor_id": doctor_id,
+        "total_reviews": len(feedbacks),
+        "average_rating": avg_rating,
+        "feedbacks": feedbacks
+    }
+
+
+@router.get("/feedback/all")
+def get_all_consultation_feedback():
+    """Retrieves all hospital consultation feedback for quality assurance."""
+    feedbacks = list(db.consultation_feedback.values())
+    feedbacks.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+    return {
+        "total": len(feedbacks),
+        "feedbacks": feedbacks
+    }
+

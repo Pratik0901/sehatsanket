@@ -8,7 +8,9 @@ from app.routers import (
     emergency_routes,
     hospital_routes,
     reminder_routes,
-    video_routes
+    video_routes,
+    lab_routes,
+    digital_twin_routes
 )
 
 app = FastAPI(
@@ -34,6 +36,9 @@ app.include_router(emergency_routes.router)
 app.include_router(hospital_routes.router)
 app.include_router(reminder_routes.router)
 app.include_router(video_routes.router)
+app.include_router(lab_routes.router)
+app.include_router(digital_twin_routes.router)
+
 
 @app.get("/")
 def root():

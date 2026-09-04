@@ -7,6 +7,7 @@ import { AiAssistantModal } from './components/AiAssistantModal';
 import { EmergencySosModal } from './components/EmergencySosModal';
 import { VideoConsultationModal } from './components/VideoConsultationModal';
 import { IncomingCallNotification } from './components/IncomingCallNotification';
+import { ConsultationFeedbackModal } from './components/ConsultationFeedbackModal';
 
 import { PortalGateway } from './views/PortalGateway';
 import { CategoryLoginPage } from './views/CategoryLoginPage';
@@ -25,6 +26,8 @@ function MainContent() {
   const [initialTriageText, setInitialTriageText] = useState('');
   const [isEmergencyOpen, setIsEmergencyOpen] = useState(false);
   const [isVideoConsultOpen, setIsVideoConsultOpen] = useState(false);
+  const [isFeedbackModalOpen, setIsFeedbackModalOpen] = useState(false);
+  const [feedbackConsultData, setFeedbackConsultData] = useState(null);
   const [incomingCall, setIncomingCall] = useState(null);
   const [activeConsultData, setActiveConsultData] = useState({ 
     id: 'consult_01', 
@@ -265,6 +268,8 @@ function MainContent() {
             onOpenAiTriage={handleOpenAiTriage}
             onOpenEmergency={() => setIsEmergencyOpen(true)}
             onOpenVideoConsult={handleOpenVideoConsult}
+            activeTab={activeTab}
+            setActiveTab={setActiveTab}
           />
         );
     }
@@ -394,10 +399,32 @@ function MainContent() {
             channel.postMessage({ type: 'CALL_ENDED', by: role });
             setTimeout(() => channel.close(), 1500);
           } catch (e) {}
+
+          // Prompt feedback modal for patients after consultation
+          if (role !== 'doctor' && role !== 'admin') {
+            setFeedbackConsultData({
+              id: activeConsultData.id || 'consult_01',
+              doctorName: activeConsultData.doctorName || 'Dr. Rajesh Rao',
+              doctorId: 'doc_05',
+              patientName: activeConsultData.patientName || user?.name || 'Priya Sharma',
+              patientId: user?.patientId || user?.id || 'p_01'
+            });
+            setIsFeedbackModalOpen(true);
+          }
         }}
         consultationId={activeConsultData.id}
         doctorName={activeConsultData.doctorName}
         patientName={activeConsultData.patientName}
+      />
+
+      {/* Multilingual Post-Consultation Patient Feedback Modal */}
+      <ConsultationFeedbackModal
+        isOpen={isFeedbackModalOpen}
+        onClose={() => setIsFeedbackModalOpen(false)}
+        consultationData={feedbackConsultData || activeConsultData}
+        onFeedbackSubmitted={(fb) => {
+          console.log("Patient feedback submitted successfully:", fb);
+        }}
       />
 
     </div>
